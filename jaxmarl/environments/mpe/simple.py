@@ -175,6 +175,8 @@ class SimpleMPE(MultiAgentEnv):
             assert (
                 len(self.accel) == self.num_agents
             ), f"Accel array length {len(self.accel)} does not match number of agents {self.num_agents}"
+
+            self.accel = jnp.asarray(self.accel)
             assert jnp.all(
                 self.accel > 0
             ), f"Accel array must be positive, got {self.accel}"

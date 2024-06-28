@@ -81,6 +81,12 @@ class AgentRNN(nn.Module):
     @nn.compact
     def __call__(self, hidden, x):
         obs, dones = x
+
+        # TODO: for capability-aware, cat the obs with capability here, modify
+        # the embedding input
+        jax.debug.print("Obs {}", obs[0][0])
+        jax.debug.print("Obs shape {}", obs.shape)
+
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
         embedding = nn.relu(embedding)
 
@@ -90,7 +96,26 @@ class AgentRNN(nn.Module):
         q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
 
         return hidden, q_vals
-    
+
+class AgentHyperRNN(nn.Module):
+    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
+    action_dim: int
+    hidden_dim: int
+    init_scale: float
+
+    @nn.compact
+    def __call__(self, hidden, x):
+        obs, dones = x
+        embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
+        embedding = nn.relu(embedding)
+
+        rnn_in = (embedding, dones)
+        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+        
+        # TODO: replace this layer w/ hyper layer fed by capabilities
+        q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
+
+        return hidden, q_vals
 
 class HyperNetwork(nn.Module):
     """HyperNetwork for generating weights of QMix' mixing network."""
