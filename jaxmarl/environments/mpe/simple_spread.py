@@ -15,13 +15,12 @@ class SimpleSpreadMPE(SimpleMPE):
         num_landmarks=3,
         local_ratio=0.5,
         action_type=DISCRETE_ACT,
-        # NOTE: only one capability per agent: acceleration
         num_capabilities=2,
         capability_aware=True,
         **kwargs,
     ):
         dim_c = 0  # NOTE follows code rather than docs
-        # NOTE: I changed this to 0 since all agents are silent by default. Didn't seem to change the obs_dim tho?
+        # NOTE: I changed this to 0 since all agents are silent by default-didn't seem to change the obs_dim
 
         # Action and observation spaces
         agents = ["agent_{}".format(i) for i in range(num_agents)]
@@ -99,9 +98,9 @@ class SimpleSpreadMPE(SimpleMPE):
             original_obs = [
                 state.p_vel[aidx].flatten(),  # 2
                 state.p_pos[aidx].flatten(),  # 2
-                landmark_pos[aidx].flatten(),  # 5, 2
-                other_pos[aidx].flatten(),  # 5, 2
-                comm[aidx].flatten(),
+                landmark_pos[aidx].flatten(),  # N, 2
+                other_pos[aidx].flatten(),  # N-1, 2
+                comm[aidx].flatten(), # 0
             ]
             capabilities = [
                 # add capabilities to obs
