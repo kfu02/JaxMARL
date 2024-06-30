@@ -77,16 +77,18 @@ class AgentRNN(nn.Module):
     action_dim: int
     hidden_dim: int
     init_scale: float
+    dim_capabilities: int
 
     @nn.compact
     def __call__(self, hidden, x):
         obs, dones = x
 
-        # TODO: for capability-aware, cat the obs with capability here, modify
-        # the embedding input
-        jax.debug.print("Obs {}", obs[0][0])
-        jax.debug.print("Obs shape {}", obs.shape)
+        # jax.debug.print("Obs {}", obs[0][0])
+        # jax.debug.print("Obs shape {}", obs.shape)
 
+        # NOTE: SimpleSpread gives obs as obs+cap (concatenated) and zeroes out
+        # the capabilities if capability_aware=False in config. Thus, no change
+        # is needed here for capability aware/unaware.
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
         embedding = nn.relu(embedding)
 
@@ -102,18 +104,49 @@ class AgentHyperRNN(nn.Module):
     action_dim: int
     hidden_dim: int
     init_scale: float
+    dim_capabilities: int
 
     @nn.compact
     def __call__(self, hidden, x):
         obs, dones = x
+
+        # jax.debug.print("num cap {}", self.dim_capabilities)
+
+        # separate obs into capabilities and observations
+        # (env gives obs = orig obs+cap)
+        cap = obs[:, :, -self.dim_capabilities:]
+        # jax.debug.print("cap {}", cap[0][0])
+        # jax.debug.print("cap shape {}", cap.shape)
+
+        obs = obs[:, :, :-self.dim_capabilities]
+        # jax.debug.print("Obs {}", obs[0][0])
+        # jax.debug.print("Obs shape {}", obs.shape)
+
+        # only feed obs through RNN encoder
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
         embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
-        
-        # TODO: replace this layer w/ hyper layer fed by capabilities
-        q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
+
+        # then use capability hypernet for last layer
+        # TODO: separate hidden dim param for policy hypernet from RNN hidden dim (and QMIX hypernet)
+        # TODO: add param for lowering init_scale
+        num_weights = (self.action_dim * self.hidden_dim)
+        num_biases = self.action_dim
+        cap_hypernet = HyperNetwork(hidden_dim=self.hidden_dim, output_dim=num_weights+num_biases, init_scale=self.init_scale/8)(cap)
+
+        # extract weights + biases from hypernet output
+        time_steps, batch_size, obs_dim = obs.shape
+        weights = cap_hypernet[:, :, :num_weights].reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
+        biases = cap_hypernet[:, :, -num_biases:].reshape(time_steps, batch_size, 1, self.action_dim)
+
+        # manually calculate q_vals = (embedding @ weights) + b
+        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
+        # with leading dims for time_steps, batch_size
+        q_vals = jnp.matmul(embedding[:, :, None, :], weights) + biases
+        q_vals = q_vals.squeeze(axis=2) # remove extra dim needed for computation
+        # TODO: add non-linearity and more layers here?
 
         return hidden, q_vals
 
@@ -212,8 +245,12 @@ def make_train(config, env):
 
         # INIT ENV
         rng, _rng = jax.random.split(rng)
-        wrapped_env = CTRolloutManager(env, batch_size=config["NUM_ENVS"])
-        test_env = CTRolloutManager(env, batch_size=config["NUM_TEST_EPISODES"]) # batched env for testing (has different batch size)
+        # TODO: add preprocess_obs flag to config, maybe rename to "agent_ID"
+        # NOTE: added preprocess_obs=False to avoid adding agent_ids to each obs
+        # NOTE: this has the side effect of also removing any zero-padding to
+        # standardize obs dimensions across agents, may be issue later
+        wrapped_env = CTRolloutManager(env, batch_size=config["NUM_ENVS"], preprocess_obs=False)
+        test_env = CTRolloutManager(env, batch_size=config["NUM_TEST_EPISODES"], preprocess_obs=False) # batched env for testing (has different batch size)
         init_obs, env_state = wrapped_env.batch_reset(_rng)
         init_dones = {agent:jnp.zeros((config["NUM_ENVS"]), dtype=bool) for agent in env.agents+['__all__']}
 
@@ -242,7 +279,10 @@ def make_train(config, env):
 
         # INIT NETWORK
         # init agent
-        agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
+        if not config["AGENT_HYPERAWARE"]:
+            agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], dim_capabilities=env.dim_capabilities)
+        else:
+            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], dim_capabilities=env.dim_capabilities)
         rng, _rng = jax.random.split(rng)
         if config["PARAMETERS_SHARING"]:
             init_x = (

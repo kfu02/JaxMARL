@@ -2,6 +2,10 @@
 "ENV_KWARGS":
   "num_agents": 3
   "num_landmarks": 3
+
+  "capability_aware": False
   # default accel in MPE is 5
   # applies even for discrete actions
   "accel": [5, 5, 5]
+  # default for agents is 0.15, for landmarks is 0.05
+  "rad": [0.08, 0.15, 0.30, 0.05, 0.05, 0.05]

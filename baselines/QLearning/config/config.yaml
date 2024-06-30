@@ -1,6 +1,6 @@
 # experiment params
-"NUM_SEEDS": 1
-"SEED": 0
+"NUM_SEEDS": 3
+"SEED": 76
 
 # wandb params
 "ENTITY": "star-lab-gt"
