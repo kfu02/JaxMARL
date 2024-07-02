@@ -104,6 +104,8 @@ class AgentHyperRNN(nn.Module):
     action_dim: int
     hidden_dim: int
     init_scale: float
+    hypernet_dim: int
+    hypernet_init_scale: int
     dim_capabilities: int
 
     @nn.compact
@@ -130,11 +132,9 @@ class AgentHyperRNN(nn.Module):
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
 
         # then use capability hypernet for last layer
-        # TODO: separate hidden dim param for policy hypernet from RNN hidden dim (and QMIX hypernet)
-        # TODO: add param for lowering init_scale
         num_weights = (self.action_dim * self.hidden_dim)
         num_biases = self.action_dim
-        cap_hypernet = HyperNetwork(hidden_dim=self.hidden_dim, output_dim=num_weights+num_biases, init_scale=self.init_scale/8)(cap)
+        cap_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights+num_biases, init_scale=self.hypernet_init_scale)(cap)
 
         # extract weights + biases from hypernet output
         time_steps, batch_size, obs_dim = obs.shape
@@ -282,7 +282,7 @@ def make_train(config, env):
         if not config["AGENT_HYPERAWARE"]:
             agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], dim_capabilities=env.dim_capabilities)
         else:
-            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], dim_capabilities=env.dim_capabilities)
+            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], dim_capabilities=env.dim_capabilities)
         rng, _rng = jax.random.split(rng)
         if config["PARAMETERS_SHARING"]:
             init_x = (
@@ -303,6 +303,11 @@ def make_train(config, env):
         # log agent param count
         agent_param_count = sum(x.size for x in jax.tree_util.tree_leaves(agent_params))
         wandb.log({"agent_param_count": agent_param_count})
+        print("-" * 10)
+        print("DETAILED AGENT PARAM COUNT:")
+        for name, param in jax.tree_util.tree_flatten_with_path(agent_params)[0]:
+            print(f"{name}: {param.shape}")
+        print("-" * 10)
 
         # init mixer
         rng, _rng = jax.random.split(rng)
@@ -695,7 +700,7 @@ def main(config):
         tags=[
             alg_name.upper(),
             env_name.upper(),
-            "RNN" if config["alg"].get("AGENT_HYPERAWARE", False) else "HyperRNN",
+            "HyperRNN" if config["alg"]["AGENT_HYPERAWARE"] else "RNN",
             "TD_LOSS" if config["alg"].get("TD_LAMBDA_LOSS", True) else "DQN_LOSS",
             f"jax_{jax.__version__}",
         ],
