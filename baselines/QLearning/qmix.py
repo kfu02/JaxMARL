@@ -300,6 +300,10 @@ def make_train(config, env):
             rngs = jax.random.split(_rng, len(env.agents)) # a random init for each agent
             agent_params = jax.vmap(agent.init, in_axes=(0, 0, 0))(rngs, init_hs, init_x)
 
+        # log agent param count
+        agent_param_count = sum(x.size for x in jax.tree_util.tree_leaves(agent_params))
+        wandb.log({"agent_param_count": agent_param_count})
+
         # init mixer
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros((len(env.agents), 1, 1))
@@ -691,7 +695,7 @@ def main(config):
         tags=[
             alg_name.upper(),
             env_name.upper(),
-            "RNN",
+            "RNN" if config["alg"].get("AGENT_HYPERAWARE", False) else "HyperRNN",
             "TD_LOSS" if config["alg"].get("TD_LAMBDA_LOSS", True) else "DQN_LOSS",
             f"jax_{jax.__version__}",
         ],
