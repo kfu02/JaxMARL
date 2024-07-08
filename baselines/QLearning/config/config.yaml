@@ -9,3 +9,5 @@
 
 # where to save the params (if None, will not save)
 "SAVE_PATH": "baselines/QLearning/checkpoints"
+
+"VISUALIZE_FINAL_POLICY": True
