@@ -16,3 +16,6 @@ tmp/
 wandb/
 outputs/
 models/
+
+# rollout videos
+**/*.gif

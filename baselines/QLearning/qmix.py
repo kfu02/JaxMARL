@@ -727,29 +727,28 @@ def main(config):
         if config["VISUALIZE_FINAL_POLICY"]:
             viz_env_states = outs['runner_state'][-2]
 
-            # build list of states manually from vectorized seq returned by jax.lax.scan
-            # NOTE: currently visualizes only 1 seed
-            # TODO: visualize all 3?
-            state_seq = []
-            first_seed_idx = 0
-            for i in range(config["alg"]["NUM_STEPS"]):
-                this_step_state = State(
-                    # 0-index = take the first of each batch of 32
-                    p_pos=viz_env_states.p_pos[first_seed_idx, i, 0, ...],
-                    p_vel=viz_env_states.p_vel[first_seed_idx, i, 0, ...],
-                    c=viz_env_states.c[first_seed_idx, i, 0, ...],
-                    accel=viz_env_states.accel[first_seed_idx, i, 0, ...],
-                    rad=viz_env_states.rad[first_seed_idx, i, 0, ...],
-                    done=viz_env_states.done[first_seed_idx, i, 0, ...],
-                    step=i,
-                )
-                state_seq.append(this_step_state)
+            # build a list of states manually from vectorized seq returned by
+            # make_train() for each seed
+            for seed in range(config["NUM_SEEDS"]):
+                state_seq = []
+                for i in range(config["alg"]["NUM_STEPS"]):
+                    this_step_state = State(
+                        # 0-index = take the first of each batch of 32
+                        p_pos=viz_env_states.p_pos[seed, i, 0, ...],
+                        p_vel=viz_env_states.p_vel[seed, i, 0, ...],
+                        c=viz_env_states.c[seed, i, 0, ...],
+                        accel=viz_env_states.accel[seed, i, 0, ...],
+                        rad=viz_env_states.rad[seed, i, 0, ...],
+                        done=viz_env_states.done[seed, i, 0, ...],
+                        step=i,
+                    )
+                    state_seq.append(this_step_state)
 
-            # save visualization to GIF for wandb display
-            visualizer = MPEVisualizer(orig_env, state_seq)
-            video_fpath = f'{save_dir}/{alg_name}.gif'
-            visualizer.animate(video_fpath)
-            wandb.log({"video": wandb.Video(video_fpath)})
+                # save visualization to GIF for wandb display
+                visualizer = MPEVisualizer(orig_env, state_seq)
+                video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
+                visualizer.animate(video_fpath)
+                wandb.log({f"seed-{seed}-rollout": wandb.Video(video_fpath)})
 
 if __name__ == "__main__":
     main()
