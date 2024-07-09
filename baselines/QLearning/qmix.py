@@ -58,7 +58,6 @@ class ScannedRNN(nn.Module):
         rnn_state = carry
         ins, resets = x
         hidden_size = ins.shape[-1]
-        # jax.debug.print('where inputs {}, {}, {}', resets[:, np.newaxis].shape, self.initialize_carry(hidden_size, *ins.shape[:-1]).shape, rnn_state.shape)
         rnn_state = jnp.where(
             resets[:, np.newaxis],
             self.initialize_carry(hidden_size, *ins.shape[:-1]),
@@ -86,9 +85,6 @@ class AgentRNN(nn.Module):
     def __call__(self, hidden, x):
         obs, dones = x
 
-        # jax.debug.print("Obs {}", obs[0][0])
-        # jax.debug.print("Obs shape {}", obs.shape)
-
         # NOTE: SimpleSpread gives obs as obs+cap (concatenated) and zeroes out
         # the capabilities if capability_aware=False in config. Thus, no change
         # is needed here for capability aware/unaware.
@@ -114,20 +110,11 @@ class AgentHyperRNN(nn.Module):
     @nn.compact
     def __call__(self, hidden, x):
         obs, dones = x
-        # jax.debug.print("called obs {}", obs)
-        # jax.debug.print("called done {}", dones)
-
-        # jax.debug.print("num cap {}", self.dim_capabilities)
 
         # separate obs into capabilities and observations
         # (env gives obs = orig obs+cap)
         cap = obs[:, :, -self.dim_capabilities:]
-        # jax.debug.print("cap {}", cap)
-        # jax.debug.print("cap shape {}", cap.shape)
-
         obs = obs[:, :, :-self.dim_capabilities]
-        # jax.debug.print("Obs {}", obs[0][0])
-        # jax.debug.print("Obs shape {}", obs.shape)
 
         # only feed obs through RNN encoder
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
@@ -756,10 +743,7 @@ def main(config):
                     done=viz_env_states.done[first_seed_idx, i, 0, ...],
                     step=i,
                 )
-                # jax.debug.print("p_pos {}", this_step_state.p_pos)
                 state_seq.append(this_step_state)
-
-            print("State seq len", len(state_seq))
 
             # save visualization to GIF for wandb display
             visualizer = MPEVisualizer(orig_env, state_seq)

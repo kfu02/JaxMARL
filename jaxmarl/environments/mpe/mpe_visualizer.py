@@ -21,8 +21,6 @@ class MPEVisualizer(object):
         
         self.comm_active = not np.all(self.env.silent)
         print('Comm active? ', self.comm_active)
-        # hardcoded for MPESimpleSpread
-        # self.comm_active = False
         
         self.init_render()
 
