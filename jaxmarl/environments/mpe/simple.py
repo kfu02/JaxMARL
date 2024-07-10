@@ -118,18 +118,42 @@ class SimpleMPE(MultiAgentEnv):
         # Environment parameters
         self.max_steps = max_steps
         self.dt = dt
-        if "rad" in kwargs:
-            self.rad = kwargs["rad"]
-            assert (
-                len(self.rad) == self.num_entities
-            ), f"Rad array length {len(self.rad)} does not match number of entities {self.num_entities}"
-            self.rad = jnp.asarray(self.rad)
 
+        if "agent_capabilities" in kwargs:
+            # separate given agent capabilities into rads/accels
+            agent_capabilities = kwargs["agent_capabilities"]
+            agent_rads = [c[0] for c in agent_capabilities]
+            agent_accels = [c[1] for c in agent_capabilities]
+
+            jax.debug.print("agent rads {}", agent_rads)
+            jax.debug.print("agent accels {}", agent_accels)
+
+            # define self.rad (must define landmark rad as well)
+            assert (
+                len(agent_rads) == self.num_agents
+            ), f"Agent rad array length {len(agent_rads)} does not match number of agents {self.num_agents}"
+            self.rad = jnp.concatenate(
+                # rad = [agent_rads, landmark_rad]
+                # by default landmarks are 0.05
+                # TODO: potentially, complicate the env by passing landmark rad in too (see reward function to ensure this is okay)
+                [jnp.asarray(agent_rads), jnp.full((self.num_landmarks), 0.05)]
+            )
             assert jnp.all(self.rad > 0), f"Rad array must be positive, got {self.rad}"
+
+            # define self.accel
+            assert (
+                len(agent_accels) == self.num_agents
+            ), f"Accel array length {len(agent_accels)} does not match number of agents {self.num_agents}"
+
+            self.accel = jnp.asarray(agent_accels)
+            assert jnp.all(
+                self.accel > 0
+            ), f"Accel array must be positive, got {self.accel}"
         else:
             self.rad = jnp.concatenate(
                 [jnp.full((self.num_agents), 0.15), jnp.full((self.num_landmarks), 0.2)]
             )
+            self.accel = jnp.full((self.num_agents), 5.0)
 
         if "moveable" in kwargs:
             self.moveable = kwargs["moveable"]
@@ -173,20 +197,6 @@ class SimpleMPE(MultiAgentEnv):
             ), f"Mass array must be positive, got {self.mass}"
         else:
             self.mass = jnp.full((self.num_entities), 1.0)
-
-        if "accel" in kwargs:
-            # TODO: rename to init accel once I have decided how to modify the accel (by reset or by step?)
-            self.accel = kwargs["accel"]
-            assert (
-                len(self.accel) == self.num_agents
-            ), f"Accel array length {len(self.accel)} does not match number of agents {self.num_agents}"
-
-            self.accel = jnp.asarray(self.accel)
-            assert jnp.all(
-                self.accel > 0
-            ), f"Accel array must be positive, got {self.accel}"
-        else:
-            self.accel = jnp.full((self.num_agents), 5.0)
 
         if "max_speed" in kwargs:
             self.max_speed = kwargs["max_speed"]
