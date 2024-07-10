@@ -617,6 +617,36 @@ def make_train(config, env, orig_env):
             step_state, (rewards, dones, infos, viz_env_states) = jax.lax.scan(
                 _greedy_env_step, step_state, None, config["NUM_STEPS"]
             )
+
+            # compute the pct of landmarks covered by an agent at the final timestep (across all envs)
+            def pct_landmarks_covered(final_step_state):
+                final_env_state = final_step_state[1].env_state
+                p_pos = final_env_state.p_pos
+                rad = final_env_state.rad
+                n_agents = p_pos.shape[-2] // 2
+                n_envs = config["NUM_TEST_EPISODES"]
+
+                # TODO: if bored, try to vectorize over n_envs too
+                covered_landmarks = 0
+                for env in range(n_envs):
+                    for landmark in range(n_agents):
+                        # get dist of this landmark to all agents
+                        landmark_pos = p_pos[env, n_agents+landmark, :]
+                        agent_pos = p_pos[env, :n_agents, :]
+                        delta_pos = agent_pos - landmark_pos
+                        dist_to_agents = jnp.sqrt(jnp.sum(jnp.square(delta_pos), axis=1))
+
+                        # then find the closest agent based on this array 
+                        # if that agent's radius > its dist to landmark, it covers it, add to tally
+                        closest_agent = jnp.argmin(dist_to_agents)
+                        closest_agent_dist = dist_to_agents[closest_agent]
+                        closest_agent_rad = rad[env, closest_agent]
+                        covered_landmarks = jax.lax.select(closest_agent_rad > closest_agent_dist,
+                                                           covered_landmarks+1,
+                                                           covered_landmarks)
+
+                return covered_landmarks / (n_agents * n_envs) # divide by n_envs because we are tallying over all n_envs
+
             # compute the metrics of the first episode that is done for each parallel env
             def first_episode_returns(rewards, dones):
                 first_done = jax.lax.select(jnp.argmax(dones)==0., dones.size, jnp.argmax(dones))
@@ -627,7 +657,8 @@ def make_train(config, env, orig_env):
             first_infos   = jax.tree_map(lambda i: jax.vmap(first_episode_returns, in_axes=1)(i[..., 0], all_dones), infos)
             metrics = {
                 'test_returns': first_returns['__all__'],# episode returns
-                **{'test_'+k:v for k,v in first_infos.items()}
+                'pct_landmarks_covered': pct_landmarks_covered(step_state),
+                **{'test_'+k:v for k,v in first_infos.items()},
             }
             if config.get('VERBOSE', False):
                 def callback(timestep, val):
