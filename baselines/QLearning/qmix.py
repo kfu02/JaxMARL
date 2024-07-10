@@ -214,7 +214,7 @@ class EpsilonGreedy:
         
         eps = self.get_epsilon(t)
         keys = dict(zip(q_vals.keys(), jax.random.split(rng, len(q_vals)))) # get a key for each agent
-        chosen_actions = jax.tree_map(lambda q, k: explore(q, eps, k), q_vals, keys)
+        chosen_actions = jax.tree.map(lambda q, k: explore(q, eps, k), q_vals, keys)
         return chosen_actions
 
 class Transition(NamedTuple):
@@ -257,7 +257,7 @@ def make_train(config, env, orig_env):
         _, sample_traj = jax.lax.scan(
             _env_sample_step, env_state, None, config["NUM_STEPS"]
         )
-        sample_traj_unbatched = jax.tree_map(lambda x: x[:, 0], sample_traj) # remove the NUM_ENV dim
+        sample_traj_unbatched = jax.tree.map(lambda x: x[:, 0], sample_traj) # remove the NUM_ENV dim
         buffer = fbx.make_trajectory_buffer(
             max_length_time_axis=config['BUFFER_SIZE']//config['NUM_ENVS'],
             min_length_time_axis=config['BUFFER_BATCH_SIZE'],
@@ -325,7 +325,7 @@ def make_train(config, env, orig_env):
             tx=tx,
         )
         # target network params
-        target_network_params = jax.tree_map(lambda x: jnp.copy(x), train_state.params)
+        target_network_params = jax.tree.map(lambda x: jnp.copy(x), train_state.params)
 
         # INIT EXPLORATION STRATEGY
         explorer = EpsilonGreedy(
@@ -378,8 +378,8 @@ def make_train(config, env, orig_env):
                 # SELECT ACTION
                 # add a dummy time_step dimension to the agent input
                 obs_   = {a:last_obs[a] for a in env.agents} # ensure to not pass the global state (obs["__all__"]) to the network
-                obs_   = jax.tree_map(lambda x: x[np.newaxis, :], obs_)
-                dones_ = jax.tree_map(lambda x: x[np.newaxis, :], last_dones)
+                obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
+                dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
                 # get the q_values from the agent netwoek
                 hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_)
                 # remove the dummy time_step dimension and index qs by the valid actions of each agent 
@@ -436,7 +436,7 @@ def make_train(config, env, orig_env):
                 _, target_q_vals = homogeneous_pass(target_network_params['agent'], init_hstate, obs_, learn_traj.dones)
 
                 # get the q_vals of the taken actions (with exploration) for each agent
-                chosen_action_qvals = jax.tree_map(
+                chosen_action_qvals = jax.tree.map(
                     lambda q, u: q_of_action(q, u)[:-1], # avoid last timestep
                     q_vals,
                     learn_traj.actions
@@ -444,7 +444,7 @@ def make_train(config, env, orig_env):
 
                 # get the target q value of the greedy actions for each agent
                 valid_q_vals = jax.tree_util.tree_map(lambda q, valid_idx: q[..., valid_idx], q_vals, wrapped_env.valid_actions)
-                target_max_qvals = jax.tree_map(
+                target_max_qvals = jax.tree.map(
                     lambda t_q, q: q_of_action(t_q, jnp.argmax(q, axis=-1))[1:], # avoid first timestep
                     target_q_vals,
                     jax.lax.stop_gradient(valid_q_vals)
@@ -498,7 +498,7 @@ def make_train(config, env, orig_env):
             # sample a batched trajectory from the buffer and set the time step dim in first axis
             rng, _rng = jax.random.split(rng)
             learn_traj = buffer.sample(buffer_state, _rng).experience # (batch_size, 1, max_time_steps, ...)
-            learn_traj = jax.tree_map(
+            learn_traj = jax.tree.map(
                 lambda x: jnp.swapaxes(x[:, 0], 0, 1), # remove the dummy sequence dim (1) and swap batch and temporal dims
                 learn_traj
             ) # (max_time_steps, batch_size, ...)
@@ -526,7 +526,7 @@ def make_train(config, env, orig_env):
             # update the target network if necessary
             target_network_params = jax.lax.cond(
                 time_state['updates'] % config['TARGET_UPDATE_INTERVAL'] == 0,
-                lambda _: jax.tree_map(lambda x: jnp.copy(x), train_state.params),
+                lambda _: jax.tree.map(lambda x: jnp.copy(x), train_state.params),
                 lambda _: target_network_params,
                 operand=None
             )
@@ -591,8 +591,8 @@ def make_train(config, env, orig_env):
                 params, env_state, last_obs, last_dones, hstate, rng = step_state
                 rng, key_s = jax.random.split(rng)
                 obs_   = {a:last_obs[a] for a in env.agents}
-                obs_   = jax.tree_map(lambda x: x[np.newaxis, :], obs_)
-                dones_ = jax.tree_map(lambda x: x[np.newaxis, :], last_dones)
+                obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
+                dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
                 hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_)
                 actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), q_vals, test_env.valid_actions)
                 obs, env_state, rewards, dones, infos = test_env.batch_step(key_s, env_state, actions)
@@ -653,11 +653,11 @@ def make_train(config, env, orig_env):
                 first_episode_mask = jnp.where(jnp.arange(dones.size) <= first_done, True, False)
                 return jnp.where(first_episode_mask, rewards, 0.).sum()
             all_dones = dones['__all__']
-            first_returns = jax.tree_map(lambda r: jax.vmap(first_episode_returns, in_axes=1)(r, all_dones), rewards)
-            first_infos   = jax.tree_map(lambda i: jax.vmap(first_episode_returns, in_axes=1)(i[..., 0], all_dones), infos)
+            first_returns = jax.tree.map(lambda r: jax.vmap(first_episode_returns, in_axes=1)(r, all_dones), rewards)
+            first_infos   = jax.tree.map(lambda i: jax.vmap(first_episode_returns, in_axes=1)(i[..., 0], all_dones), infos)
             metrics = {
                 'test_returns': first_returns['__all__'],# episode returns
-                'pct_landmarks_covered': pct_landmarks_covered(step_state),
+                'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
                 **{'test_'+k:v for k,v in first_infos.items()},
             }
             if config.get('VERBOSE', False):
@@ -727,7 +727,8 @@ def main(config):
         tags=[
             alg_name.upper(),
             env_name.upper(),
-            "HyperRNN" if config["alg"]["AGENT_HYPERAWARE"] else "RNN",
+            "HYPER" if config["alg"]["AGENT_HYPERAWARE"] else "RNN",
+            "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware",
             "TD_LOSS" if config["alg"].get("TD_LAMBDA_LOSS", True) else "DQN_LOSS",
             f"jax_{jax.__version__}",
         ],
@@ -749,7 +750,7 @@ def main(config):
             save_file(flattened_dict, filename)
 
         model_state = outs['runner_state'][0]
-        params = jax.tree_map(lambda x: x[0], model_state.params) # save only params of the firt run
+        params = jax.tree.map(lambda x: x[0], model_state.params) # save only params of the firt run
         save_dir = os.path.join(config['SAVE_PATH'], env_name)
         os.makedirs(save_dir, exist_ok=True)
         save_params(params, f'{save_dir}/{alg_name}.safetensors')
