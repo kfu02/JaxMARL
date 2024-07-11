@@ -49,6 +49,9 @@ class SimpleMPE(MultiAgentEnv):
         dt=DT,
         **kwargs,
     ):
+        self.test_env_flag = kwargs["test_env_flag"] if "test_env_flag" in kwargs else False
+        self.test_capabilities = kwargs["test_capabilities"] if "test_capabilities" in kwargs else None
+
         # Agent and entity constants
         self.num_agents = num_agents
         self.num_landmarks = num_landmarks
@@ -120,40 +123,8 @@ class SimpleMPE(MultiAgentEnv):
         self.dt = dt
 
         if "agent_capabilities" in kwargs:
-            # separate given agent capabilities into rads/accels
-            agent_capabilities = kwargs["agent_capabilities"]
-            agent_rads = [c[0] for c in agent_capabilities]
-            agent_accels = [c[1] for c in agent_capabilities]
-
-            jax.debug.print("agent rads {}", agent_rads)
-            jax.debug.print("agent accels {}", agent_accels)
-
-            # define self.rad (must define landmark rad as well)
-            assert (
-                len(agent_rads) == self.num_agents
-            ), f"Agent rad array length {len(agent_rads)} does not match number of agents {self.num_agents}"
-            self.rad = jnp.concatenate(
-                # rad = [agent_rads, landmark_rad]
-                # by default landmarks are 0.05
-                # TODO: potentially, complicate the env by passing landmark rad in too (see reward function to ensure this is okay)
-                [jnp.asarray(agent_rads), jnp.full((self.num_landmarks), 0.05)]
-            )
-            assert jnp.all(self.rad > 0), f"Rad array must be positive, got {self.rad}"
-
-            # define self.accel
-            assert (
-                len(agent_accels) == self.num_agents
-            ), f"Accel array length {len(agent_accels)} does not match number of agents {self.num_agents}"
-
-            self.accel = jnp.asarray(agent_accels)
-            assert jnp.all(
-                self.accel > 0
-            ), f"Accel array must be positive, got {self.accel}"
-        else:
-            self.rad = jnp.concatenate(
-                [jnp.full((self.num_agents), 0.15), jnp.full((self.num_landmarks), 0.2)]
-            )
-            self.accel = jnp.full((self.num_agents), 5.0)
+            # save list of capabilities to be sampled from later (see reset())
+            self.agent_capabilities = jnp.asarray(kwargs["agent_capabilities"])
 
         if "moveable" in kwargs:
             self.moveable = kwargs["moveable"]
@@ -282,7 +253,7 @@ class SimpleMPE(MultiAgentEnv):
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, State]:
         """Initialise with random positions"""
 
-        key_a, key_l = jax.random.split(key)
+        key_a, key_l, key_c = jax.random.split(key, num=3)
 
         p_pos = jnp.concatenate(
             [
@@ -295,12 +266,26 @@ class SimpleMPE(MultiAgentEnv):
             ]
         )
 
+        # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
+        team_capabilities = jax.random.choice(key_c, self.agent_capabilities, shape=(self.num_agents,), replace=False)
+
+        # unless a test distribution is provided and this is a test_env
+        if self.test_env_flag and self.test_capabilities is not None:
+            team_capabilities = jnp.asarray(self.test_capabilities)
+
+        agent_rads = team_capabilities[:, 0]
+        agent_accels = team_capabilities[:, 1]
+
         state = State(
             p_pos=p_pos,
             p_vel=jnp.zeros((self.num_entities, self.dim_p)),
             c=jnp.zeros((self.num_agents, self.dim_c)),
-            accel=self.accel,
-            rad=self.rad,
+            accel=agent_accels,
+            rad=jnp.concatenate(
+                # NOTE: here, must define landmark rad as well, by default landmarks are 0.05
+                # TODO: potentially, complicate the env by passing landmark rad in too (see reward function to ensure this is okay)
+                [agent_rads, jnp.full((self.num_landmarks), 0.05)]
+            ),
             done=jnp.full((self.num_agents), False),
             step=0,
         )

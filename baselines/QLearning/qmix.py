@@ -225,7 +225,11 @@ class Transition(NamedTuple):
     infos: dict
 
 
-def make_train(config, env, orig_env):
+def make_train(config, log_train_env, log_test_env, viz_test_env):
+    """
+    NOTE: log_train_env and log_test_env should be identical, other than a single
+    test_env_flag, which causes log_test_env to only sample from test_capabilities.
+    """
 
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -240,17 +244,17 @@ def make_train(config, env, orig_env):
         # NOTE: added preprocess_obs=False to avoid adding agent_ids to each obs
         # NOTE: this has the side effect of also removing any zero-padding to
         # standardize obs dimensions across agents, may be issue later
-        wrapped_env = CTRolloutManager(env, batch_size=config["NUM_ENVS"], preprocess_obs=False)
-        test_env = CTRolloutManager(env, batch_size=config["NUM_TEST_EPISODES"], preprocess_obs=False) # batched env for testing (has different batch size)
+        wrapped_env = CTRolloutManager(log_train_env, batch_size=config["NUM_ENVS"], preprocess_obs=False)
+        test_env = CTRolloutManager(log_test_env, batch_size=config["NUM_TEST_EPISODES"], preprocess_obs=False) # batched env for testing (has different batch size), chooses fixed team compositions on reset (may be different from train set)
         init_obs, env_state = wrapped_env.batch_reset(_rng)
-        init_dones = {agent:jnp.zeros((config["NUM_ENVS"]), dtype=bool) for agent in env.agents+['__all__']}
+        init_dones = {agent:jnp.zeros((config["NUM_ENVS"]), dtype=bool) for agent in log_train_env.agents+['__all__']}
 
         # INIT BUFFER
         # to initalize the buffer is necessary to sample a trajectory to know its strucutre
         def _env_sample_step(env_state, unused):
             rng, key_a, key_s = jax.random.split(jax.random.PRNGKey(0), 3) # use a dummy rng here
-            key_a = jax.random.split(key_a, env.num_agents)
-            actions = {agent: wrapped_env.batch_sample(key_a[i], agent) for i, agent in enumerate(env.agents)}
+            key_a = jax.random.split(key_a, log_train_env.num_agents)
+            actions = {agent: wrapped_env.batch_sample(key_a[i], agent) for i, agent in enumerate(log_train_env.agents)}
             obs, env_state, rewards, dones, infos = wrapped_env.batch_step(key_s, env_state, actions)
             transition = Transition(obs, actions, rewards, dones, infos)
             return env_state, transition
@@ -271,9 +275,9 @@ def make_train(config, env, orig_env):
         # INIT NETWORK
         # init agent
         if not config["AGENT_HYPERAWARE"]:
-            agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], dim_capabilities=env.dim_capabilities)
+            agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], dim_capabilities=log_train_env.dim_capabilities)
         else:
-            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], dim_capabilities=env.dim_capabilities)
+            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], dim_capabilities=log_train_env.dim_capabilities)
         rng, _rng = jax.random.split(rng)
 
         if config["PARAMETERS_SHARING"]:
@@ -285,11 +289,11 @@ def make_train(config, env, orig_env):
             agent_params = agent.init(_rng, init_hs, init_x)
         else:
             init_x = (
-                jnp.zeros((len(env.agents), 1, 1, wrapped_env.obs_size)), # (time_step, batch_size, obs_size)
-                jnp.zeros((len(env.agents), 1, 1)) # (time_step, batch size)
+                jnp.zeros((len(log_train_env.agents), 1, 1, wrapped_env.obs_size)), # (time_step, batch_size, obs_size)
+                jnp.zeros((len(log_train_env.agents), 1, 1)) # (time_step, batch size)
             )
-            init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env.agents),  1) # (n_agents, batch_size, hidden_dim)
-            rngs = jax.random.split(_rng, len(env.agents)) # a random init for each agent
+            init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents),  1) # (n_agents, batch_size, hidden_dim)
+            rngs = jax.random.split(_rng, len(log_train_env.agents)) # a random init for each agent
             agent_params = jax.vmap(agent.init, in_axes=(0, 0, 0))(rngs, init_hs, init_x)
 
         # log agent param count
@@ -303,7 +307,7 @@ def make_train(config, env, orig_env):
 
         # init mixer
         rng, _rng = jax.random.split(rng)
-        init_x = jnp.zeros((len(env.agents), 1, 1))
+        init_x = jnp.zeros((len(log_train_env.agents), 1, 1))
         state_size = sample_traj.obs['__all__'].shape[-1]  # get the state shape from the buffer
         init_state = jnp.zeros((1, 1, state_size))
         mixer = MixingNetwork(config['MIXER_EMBEDDING_DIM'], config["MIXER_HYPERNET_HIDDEN_DIM"], config['MIXER_INIT_SCALE'])
@@ -377,7 +381,7 @@ def make_train(config, env, orig_env):
 
                 # SELECT ACTION
                 # add a dummy time_step dimension to the agent input
-                obs_   = {a:last_obs[a] for a in env.agents} # ensure to not pass the global state (obs["__all__"]) to the network
+                obs_   = {a:last_obs[a] for a in log_train_env.agents} # ensure to not pass the global state (obs["__all__"]) to the network
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
                 # get the q_values from the agent netwoek
@@ -398,9 +402,9 @@ def make_train(config, env, orig_env):
             # prepare the step state and collect the episode trajectory
             rng, _rng = jax.random.split(rng)
             if config["PARAMETERS_SHARING"]:
-                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env.agents)*config["NUM_ENVS"]) # (n_agents*n_envs, hs_size)
+                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents)*config["NUM_ENVS"]) # (n_agents*n_envs, hs_size)
             else:
-                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env.agents), config["NUM_ENVS"]) # (n_agents, n_envs, hs_size)
+                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents), config["NUM_ENVS"]) # (n_agents, n_envs, hs_size)
 
             step_state = (
                 train_state.params['agent'],
@@ -431,7 +435,7 @@ def make_train(config, env, orig_env):
 
             def _loss_fn(params, target_network_params, init_hstate, learn_traj):
 
-                obs_ = {a:learn_traj.obs[a] for a in env.agents} # ensure to not pass the global state (obs["__all__"]) to the network
+                obs_ = {a:learn_traj.obs[a] for a in log_train_env.agents} # ensure to not pass the global state (obs["__all__"]) to the network
                 _, q_vals = homogeneous_pass(params['agent'], init_hstate, obs_, learn_traj.dones)
                 _, target_q_vals = homogeneous_pass(target_network_params['agent'], init_hstate, obs_, learn_traj.dones)
 
@@ -503,9 +507,9 @@ def make_train(config, env, orig_env):
                 learn_traj
             ) # (max_time_steps, batch_size, ...)
             if config["PARAMETERS_SHARING"]:
-                init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env.agents)*config["BUFFER_BATCH_SIZE"]) # (n_agents*batch_size, hs_size)
+                init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents)*config["BUFFER_BATCH_SIZE"]) # (n_agents*batch_size, hs_size)
             else:
-                init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env.agents), config["BUFFER_BATCH_SIZE"]) # (n_agents, batch_size, hs_size)
+                init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents), config["BUFFER_BATCH_SIZE"]) # (n_agents, batch_size, hs_size)
 
             # compute loss and optimize grad
             grad_fn = jax.value_and_grad(_loss_fn, has_aux=False)
@@ -517,7 +521,7 @@ def make_train(config, env, orig_env):
             # reset the environment
             rng, _rng = jax.random.split(rng)
             init_obs, env_state = wrapped_env.batch_reset(_rng)
-            init_dones = {agent:jnp.zeros((config["NUM_ENVS"]), dtype=bool) for agent in env.agents+['__all__']}
+            init_dones = {agent:jnp.zeros((config["NUM_ENVS"]), dtype=bool) for agent in log_train_env.agents+['__all__']}
 
             # update the states
             time_state['timesteps'] = step_state[-1]
@@ -590,7 +594,7 @@ def make_train(config, env, orig_env):
             def _greedy_env_step(step_state, unused):
                 params, env_state, last_obs, last_dones, hstate, rng = step_state
                 rng, key_s = jax.random.split(rng)
-                obs_   = {a:last_obs[a] for a in env.agents}
+                obs_   = {a:last_obs[a] for a in log_test_env.agents}
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
                 hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_)
@@ -600,12 +604,12 @@ def make_train(config, env, orig_env):
                 return step_state, (rewards, dones, infos, env_state.env_state) # save all EnvState (not LogEnvState) to visualize
             rng, _rng = jax.random.split(rng)
             init_obs, env_state = test_env.batch_reset(_rng)
-            init_dones = {agent:jnp.zeros((config["NUM_TEST_EPISODES"]), dtype=bool) for agent in env.agents+['__all__']}
+            init_dones = {agent:jnp.zeros((config["NUM_TEST_EPISODES"]), dtype=bool) for agent in log_test_env.agents+['__all__']}
             rng, _rng = jax.random.split(rng)
             if config["PARAMETERS_SHARING"]:
-                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env.agents)*config["NUM_TEST_EPISODES"]) # (n_agents*n_envs, hs_size)
+                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_test_env.agents)*config["NUM_TEST_EPISODES"]) # (n_agents*n_envs, hs_size)
             else:
-                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env.agents), config["NUM_TEST_EPISODES"]) # (n_agents, n_envs, hs_size)
+                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_test_env.agents), config["NUM_TEST_EPISODES"]) # (n_agents, n_envs, hs_size)
             step_state = (
                 params,
                 env_state,
@@ -710,14 +714,18 @@ def main(config):
         env_name = f"{config['env']['ENV_NAME']}_{config['env']['MAP_NAME']}"
         orig_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
         env = SMAXLogWrapper(orig_env)
+        # TODO: add test_env to smax
    # overcooked needs a layout 
     elif 'overcooked' in env_name.lower():
+        # NOTE: overcooked will not work with current pipeline
         config['env']["ENV_KWARGS"]["layout"] = overcooked_layouts[config['env']["ENV_KWARGS"]["layout"]]
-        orig_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
-        env = LogWrapper(orig_env)
+        env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
+        env = LogWrapper(env)
     else:
-        orig_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
-        env = LogWrapper(orig_env)
+        train_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
+        log_train_env = LogWrapper(train_env)
+        viz_test_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'], test_env_flag=True)
+        log_test_env = LogWrapper(viz_test_env)
 
     #config["alg"]["NUM_STEPS"] = config["alg"].get("NUM_STEPS", env.max_steps) # default steps defined by the env
     
@@ -739,7 +747,7 @@ def main(config):
     
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], env, orig_env)))
+    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env, viz_test_env)))
     outs = jax.block_until_ready(train_vjit(rngs))
     
     # save params
@@ -760,27 +768,27 @@ def main(config):
             viz_env_states = outs['runner_state'][-2]
 
             # build a list of states manually from vectorized seq returned by
-            # make_train() for each seed
-            for seed in range(config["NUM_SEEDS"]):
-                state_seq = []
-                for i in range(config["alg"]["NUM_STEPS"]):
-                    this_step_state = State(
-                        # 0-index = take the first of each batch of 32
-                        p_pos=viz_env_states.p_pos[seed, i, 0, ...],
-                        p_vel=viz_env_states.p_vel[seed, i, 0, ...],
-                        c=viz_env_states.c[seed, i, 0, ...],
-                        accel=viz_env_states.accel[seed, i, 0, ...],
-                        rad=viz_env_states.rad[seed, i, 0, ...],
-                        done=viz_env_states.done[seed, i, 0, ...],
-                        step=i,
-                    )
-                    state_seq.append(this_step_state)
+            # make_train() for desired seeds/envs
+            for seed in range(config["VIZ_NUM_SEEDS"]):
+                for env in range(config["VIZ_NUM_ENVS"]):
+                    state_seq = []
+                    for i in range(config["alg"]["NUM_STEPS"]):
+                        this_step_state = State(
+                            p_pos=viz_env_states.p_pos[seed, i, env, ...],
+                            p_vel=viz_env_states.p_vel[seed, i, env, ...],
+                            c=viz_env_states.c[seed, i, env, ...],
+                            accel=viz_env_states.accel[seed, i, env, ...],
+                            rad=viz_env_states.rad[seed, i, env, ...],
+                            done=viz_env_states.done[seed, i, env, ...],
+                            step=i,
+                        )
+                        state_seq.append(this_step_state)
 
-                # save visualization to GIF for wandb display
-                visualizer = MPEVisualizer(orig_env, state_seq)
-                video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
-                visualizer.animate(video_fpath)
-                wandb.log({f"seed-{seed}-rollout": wandb.Video(video_fpath)})
+                    # save visualization to GIF for wandb display
+                    visualizer = MPEVisualizer(viz_test_env, state_seq)
+                    video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
+                    visualizer.animate(video_fpath)
+                    wandb.log({f"env-{env}-seed-{seed}-rollout": wandb.Video(video_fpath)})
 
 if __name__ == "__main__":
     main()
