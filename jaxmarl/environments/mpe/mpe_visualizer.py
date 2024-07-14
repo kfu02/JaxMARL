@@ -57,7 +57,7 @@ class MPEVisualizer(object):
         self.entity_artists = []
         for i in range(self.env.num_entities):
             c = Circle(
-                state.p_pos[i], self.env.rad[i], color=np.array(self.env.colour[i]) / 255
+                state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
             )
             self.ax.add_patch(c)
             self.entity_artists.append(c)

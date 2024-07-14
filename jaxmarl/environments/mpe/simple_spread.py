@@ -15,15 +15,23 @@ class SimpleSpreadMPE(SimpleMPE):
         num_landmarks=3,
         local_ratio=0.5,
         action_type=DISCRETE_ACT,
+        num_capabilities=2,
+        capability_aware=True,
+        **kwargs,
     ):
-        dim_c = 2  # NOTE follows code rather than docs
+        dim_c = 0  # NOTE follows code rather than docs
+        # NOTE: I changed this to 0 since all agents are silent by default-didn't seem to change the obs_dim
 
         # Action and observation spaces
         agents = ["agent_{}".format(i) for i in range(num_agents)]
         landmarks = ["landmark {}".format(i) for i in range(num_landmarks)]
 
+        # our capabilities + full team capabilities
+        self.capability_aware = capability_aware
+        self.dim_capabilities = num_capabilities + num_agents * num_capabilities
+
         observation_spaces = {
-            i:Box(-jnp.inf, jnp.inf, (4+(num_agents-1)*4+(num_landmarks*2),)) 
+            i:Box(-jnp.inf, jnp.inf, (4+(num_agents-1)*2+(num_landmarks*2)+self.dim_capabilities,)) 
             for i in agents
         }
 
@@ -36,9 +44,10 @@ class SimpleSpreadMPE(SimpleMPE):
         ), "local_ratio must be between 0.0 and 1.0"
 
         # Parameters
-        rad = jnp.concatenate(
-            [jnp.full((num_agents), 0.15), jnp.full((num_landmarks), 0.05)]
-        )
+        # NOTE: rad now passed in
+        # rad = jnp.concatenate(
+        #     [jnp.full((num_agents), 0.15), jnp.full((num_landmarks), 0.05)]
+        # )
         collide = jnp.concatenate(
             [jnp.full((num_agents), True), jnp.full((num_landmarks), False)]
         )
@@ -52,8 +61,10 @@ class SimpleSpreadMPE(SimpleMPE):
             observation_spaces=observation_spaces,
             dim_c=dim_c,
             colour=colour,
-            rad=rad,
+            # NOTE: rad now passed in
+            # rad=rad,
             collide=collide,
+            **kwargs,
         )
 
     def get_obs(self, state: State) -> Dict[str, chex.Array]:
@@ -84,14 +95,27 @@ class SimpleSpreadMPE(SimpleMPE):
         landmark_pos, other_pos, comm = _common_stats(self.agent_range)
 
         def _obs(aidx: int):
+            original_obs = [
+                state.p_vel[aidx].flatten(),  # 2
+                state.p_pos[aidx].flatten(),  # 2
+                landmark_pos[aidx].flatten(),  # N, 2
+                other_pos[aidx].flatten(),  # N-1, 2
+                comm[aidx].flatten(), # 0
+            ]
+            capabilities = [
+                # add capabilities to obs
+                # (in this env, only acceleration)
+                state.accel[aidx].flatten(), # this agent's capabilities (1)
+                state.accel.flatten(), # teammates' capabilities (N * 1)
+                state.rad[aidx].flatten(), # this agent's capabilities (1)
+                state.rad[:-self.num_agents].flatten(), # teammates' capabilities (N * 1) (in this case we remove the extraneous landmark radius info)
+            ]
+            # zero-out capabilities for non-capability-aware baselines
+            if not self.capability_aware:
+                capabilities = [jnp.zeros((self.dim_capabilities))]
+
             return jnp.concatenate(
-                [
-                    state.p_vel[aidx].flatten(),  # 2
-                    state.p_pos[aidx].flatten(),  # 2
-                    landmark_pos[aidx].flatten(),  # 5, 2
-                    other_pos[aidx].flatten(),  # 5, 2
-                    comm[aidx].flatten(),
-                ]
+                original_obs + capabilities
             )
 
         obs = {a: _obs(i) for i, a in enumerate(self.agents)}

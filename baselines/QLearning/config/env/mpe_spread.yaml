@@ -2,3 +2,13 @@
 "ENV_KWARGS":
   "num_agents": 3
   "num_landmarks": 3
+
+  "capability_aware": True # T/F
+  # capabilities implemented in MPE_simple_spread_v3: [accel, rad]
+  # default accel in MPE is 5 (applies even for discrete actions)
+  # default rad for agents is 0.15 (for landmarks is 0.05)
+
+  # [[rad, accel]_1, [r, a]_2, ...]
+  # "agent_capabilities": [[0.075, 10], [0.13, 7], [0.15, 5], [0.2, 3], [0.30, 2.5]]
+  "agent_capabilities": [[0.20, 5], [0.12, 5], [0.15, 5], [0.12, 5], [0.15, 5]]
+  "test_capabilities": [[0.3, 5], [0.08, 5], [0.08, 5]]

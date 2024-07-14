@@ -25,6 +25,8 @@ class State:
     p_pos: chex.Array  # [num_entities, [x, y]]
     p_vel: chex.Array  # [n, [x, y]]
     c: chex.Array  # communication state [num_agents, [dim_c]]
+    accel: chex.Array # [n, 1] representing accel applied to actions
+    rad: chex.Array # [n, 1] representing rad of each entity (first agents, then landmarks)
     done: chex.Array  # bool [num_agents, ]
     step: int  # current step
     goal: int = None  # index of target landmark, used in: SimpleSpeakerListenerMPE, SimpleReferenceMPE, SimplePushMPE, SimpleAdversaryMPE
@@ -47,6 +49,9 @@ class SimpleMPE(MultiAgentEnv):
         dt=DT,
         **kwargs,
     ):
+        self.test_env_flag = kwargs["test_env_flag"] if "test_env_flag" in kwargs else False
+        self.test_capabilities = kwargs["test_capabilities"] if "test_capabilities" in kwargs else None
+
         # Agent and entity constants
         self.num_agents = num_agents
         self.num_landmarks = num_landmarks
@@ -116,16 +121,10 @@ class SimpleMPE(MultiAgentEnv):
         # Environment parameters
         self.max_steps = max_steps
         self.dt = dt
-        if "rad" in kwargs:
-            self.rad = kwargs["rad"]
-            assert (
-                len(self.rad) == self.num_entities
-            ), f"Rad array length {len(self.rad)} does not match number of entities {self.num_entities}"
-            assert jnp.all(self.rad > 0), f"Rad array must be positive, got {self.rad}"
-        else:
-            self.rad = jnp.concatenate(
-                [jnp.full((self.num_agents), 0.15), jnp.full((self.num_landmarks), 0.2)]
-            )
+
+        if "agent_capabilities" in kwargs:
+            # save list of capabilities to be sampled from later (see reset())
+            self.agent_capabilities = jnp.asarray(kwargs["agent_capabilities"])
 
         if "moveable" in kwargs:
             self.moveable = kwargs["moveable"]
@@ -169,17 +168,6 @@ class SimpleMPE(MultiAgentEnv):
             ), f"Mass array must be positive, got {self.mass}"
         else:
             self.mass = jnp.full((self.num_entities), 1.0)
-
-        if "accel" in kwargs:
-            self.accel = kwargs["accel"]
-            assert (
-                len(self.accel) == self.num_agents
-            ), f"Accel array length {len(self.accel)} does not match number of agents {self.num_agents}"
-            assert jnp.all(
-                self.accel > 0
-            ), f"Accel array must be positive, got {self.accel}"
-        else:
-            self.accel = jnp.full((self.num_agents), 5.0)
 
         if "max_speed" in kwargs:
             self.max_speed = kwargs["max_speed"]
@@ -227,7 +215,7 @@ class SimpleMPE(MultiAgentEnv):
 
     @partial(jax.jit, static_argnums=[0])
     def step_env(self, key: chex.PRNGKey, state: State, actions: dict):
-        u, c = self.set_actions(actions)
+        u, c = self.set_actions(state, actions)
         if (
             c.shape[1] < self.dim_c
         ):  # This is due to the MPE code carrying around 0s for the communication channels
@@ -265,7 +253,7 @@ class SimpleMPE(MultiAgentEnv):
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, State]:
         """Initialise with random positions"""
 
-        key_a, key_l = jax.random.split(key)
+        key_a, key_l, key_c = jax.random.split(key, num=3)
 
         p_pos = jnp.concatenate(
             [
@@ -278,10 +266,26 @@ class SimpleMPE(MultiAgentEnv):
             ]
         )
 
+        # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
+        team_capabilities = jax.random.choice(key_c, self.agent_capabilities, shape=(self.num_agents,), replace=False)
+
+        # unless a test distribution is provided and this is a test_env
+        if self.test_env_flag and self.test_capabilities is not None:
+            team_capabilities = jnp.asarray(self.test_capabilities)
+
+        agent_rads = team_capabilities[:, 0]
+        agent_accels = team_capabilities[:, 1]
+
         state = State(
             p_pos=p_pos,
             p_vel=jnp.zeros((self.num_entities, self.dim_p)),
             c=jnp.zeros((self.num_agents, self.dim_c)),
+            accel=agent_accels,
+            rad=jnp.concatenate(
+                # NOTE: here, must define landmark rad as well, by default landmarks are 0.05
+                # TODO: potentially, complicate the env by passing landmark rad in too (see reward function to ensure this is okay)
+                [agent_rads, jnp.full((self.num_landmarks), 0.05)]
+            ),
             done=jnp.full((self.num_agents), False),
             step=0,
         )
@@ -316,33 +320,33 @@ class SimpleMPE(MultiAgentEnv):
         r = _reward(self.agent_range, state)
         return {agent: r[i] for i, agent in enumerate(self.agents)}
 
-    def set_actions(self, actions: Dict):
+    def set_actions(self, state: State, actions: Dict):
         """Extract u and c actions for all agents from actions Dict."""
 
         actions = jnp.array([actions[i] for i in self.agents]).reshape(
             (self.num_agents, -1)
         )
 
-        return self.action_decoder(self.agent_range, actions)
+        return self.action_decoder(self.agent_range, state, actions)
 
-    @partial(jax.vmap, in_axes=[None, 0, 0])
+    @partial(jax.vmap, in_axes=[None, 0, None, 0])
     def _decode_continuous_action(
-        self, a_idx: int, action: chex.Array
+        self, a_idx: int, state: State, action: chex.Array
     ) -> Tuple[chex.Array, chex.Array]:
         u = jnp.array([action[2] - action[1], action[4] - action[3]])
-        u = u * self.accel[a_idx] * self.moveable[a_idx]
+        u = u * state.accel[a_idx] * self.moveable[a_idx]
         c = action[5:]
         return u, c
 
-    @partial(jax.vmap, in_axes=[None, 0, 0])
+    @partial(jax.vmap, in_axes=[None, 0, None, 0])
     def _decode_discrete_action(
-        self, a_idx: int, action: chex.Array
+        self, a_idx: int, state: State, action: chex.Array
     ) -> Tuple[chex.Array, chex.Array]:
         u = jnp.zeros((self.dim_p,))
         idx = jax.lax.select(action <= 2, 0, 1)
         u_val = jax.lax.select(action % 2 == 0, 1.0, -1.0) * (action != 0)
         u = u.at[idx].set(u_val)
-        u = u * self.accel[a_idx] * self.moveable[a_idx]
+        u = u * state.accel[a_idx] * self.moveable[a_idx]
         return u, jnp.zeros((self.dim_c,))
 
     def _world_step(self, key: chex.PRNGKey, state: State, u: chex.Array):
@@ -438,7 +442,7 @@ class SimpleMPE(MultiAgentEnv):
 
     # get collision forces for any contact between two entities BUG
     def _get_collision_force(self, idx_a: int, idx_b: int, state: State):
-        dist_min = self.rad[idx_a] + self.rad[idx_b]
+        dist_min = state.rad[idx_a] + state.rad[idx_b]
         delta_pos = state.p_pos[idx_a] - state.p_pos[idx_b]
 
         dist = jnp.sqrt(jnp.sum(jnp.square(delta_pos)))
@@ -478,7 +482,7 @@ class SimpleMPE(MultiAgentEnv):
     ### === UTILITIES === ###
     def is_collision(self, a: int, b: int, state: State):
         """check if two entities are colliding"""
-        dist_min = self.rad[a] + self.rad[b]
+        dist_min = state.rad[a] + state.rad[b]
         delta_pos = state.p_pos[a] - state.p_pos[b]
         dist = jnp.sqrt(jnp.sum(jnp.square(delta_pos)))
         return (dist < dist_min) & (self.collide[a] & self.collide[b]) & (a != b)

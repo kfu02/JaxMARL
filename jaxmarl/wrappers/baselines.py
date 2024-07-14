@@ -249,6 +249,9 @@ class CTRolloutManager(JaxMARLWrapper):
         self.max_obs_length = max(list(map(lambda x: get_space_dim(x), self.observation_spaces.values())))
         self.max_action_space = max(list(map(lambda x: get_space_dim(x), self.action_spaces.values())))
         self.obs_size = self.max_obs_length + len(self.agents)
+        # NOTE: if no agent IDs added, subtract len of agent ID from the obs_size
+        if not self.preprocess_obs:
+            self.obs_size = self.max_obs_length
 
         # agents ids
         self.agents_one_hot = {a:oh for a, oh in zip(self.agents, jnp.eye(len(self.agents)))}
