@@ -43,8 +43,6 @@ from jaxmarl.environments.overcooked import overcooked_layouts
 from jaxmarl.environments.mpe import MPEVisualizer
 from jaxmarl.environments.mpe.simple import State
 
-# transformer
-from transf_qmix import EncoderBlock
 
 class ScannedRNN(nn.Module):
 
@@ -101,6 +99,64 @@ class AgentRNN(nn.Module):
         return hidden, q_vals
 
 
+# transformer
+class EncoderBlock(nn.Module):
+    input_dim : int  # Input dimension is needed here since it is equal to the output dimension (residual connection)
+    num_heads : int  # NOTE: input must be divisible by num_heads
+    dim_feedforward : int
+    init_scale: float
+    dropout_prob : float = 0.
+
+    def setup(self):
+        # Attention layer
+        self.self_attn = nn.MultiHeadDotProductAttention(
+            num_heads=self.num_heads,
+            dropout_rate=self.dropout_prob,
+            kernel_init=nn.initializers.xavier_uniform(),
+            use_bias=False,
+        )
+
+        # Two-layer MLP
+        self.linear = [
+            nn.Dense(self.dim_feedforward, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0)),
+            nn.Dense(self.input_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))
+        ]
+        # Layers to apply in between the main layers
+        self.norm1 = nn.LayerNorm()
+        self.norm2 = nn.LayerNorm()
+        self.dropout = nn.Dropout(self.dropout_prob)
+
+        # learnable input feature scaling
+        self.input_feature_scaling = self.param('input_feature_scaling', nn.initializers.ones, (self.input_dim,))
+
+    def __call__(self, x, mask=None, deterministic=True):
+        # masking
+        if mask is not None:
+            mask = jnp.repeat(nn.make_attention_mask(mask, mask), self.num_heads, axis=-3)
+
+        # input normalization (by z-score, only within team)
+        # x = (x - x.mean(axis=-2, keepdims=True)) / (x.std(axis=-2, keepdims=True) + 1e-9)
+
+        # learnable input feature scaling (apply abs as scaling should not change size)
+        x = x * jnp.abs(self.input_feature_scaling)
+
+        # self attention
+        attended = self.self_attn(inputs_q=x, inputs_kv=x, mask=mask, deterministic=deterministic)
+
+        x = self.norm1(attended + x)
+        x = x + self.dropout(x, deterministic=deterministic)
+
+        # MLP part
+        feedforward = self.linear[0](x)
+        feedforward = nn.relu(feedforward)
+        feedforward = self.linear[1](feedforward)
+
+        x = self.norm2(feedforward+x)
+        x = x + self.dropout(x, deterministic=deterministic)
+
+        return x
+
+
 class TransformerEncoder(nn.Module):
     num_layers : int
     input_dim : int # of a token, in our case dim_cap
@@ -108,15 +164,12 @@ class TransformerEncoder(nn.Module):
     dim_feedforward : int
     dropout_prob : float
     init_scale : int
-    use_fast_attention : bool = False
 
     def setup(self):
-        # TODO: the EncoderBlock doesn't actually use init_scale based on transf_qmix's implementation
-        self.layers = [EncoderBlock(hidden_dim=self.input_dim, 
+        self.layers = [EncoderBlock(input_dim=self.input_dim, 
                                     num_heads=self.num_heads,
                                     dim_feedforward=self.dim_feedforward,
                                     init_scale=self.init_scale,
-                                    use_fast_attention=self.use_fast_attention,
                                     dropout_prob=self.dropout_prob)
                        for _ in range(self.num_layers)]
 
