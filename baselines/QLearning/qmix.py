@@ -43,6 +43,9 @@ from jaxmarl.environments.overcooked import overcooked_layouts
 from jaxmarl.environments.mpe import MPEVisualizer
 from jaxmarl.environments.mpe.simple import State
 
+# transformer
+from transf_qmix import EncoderBlock
+
 class ScannedRNN(nn.Module):
 
     @partial(
@@ -79,7 +82,6 @@ class AgentRNN(nn.Module):
     action_dim: int
     hidden_dim: int
     init_scale: float
-    dim_capabilities: int
 
     @nn.compact
     def __call__(self, hidden, x):
@@ -98,6 +100,43 @@ class AgentRNN(nn.Module):
 
         return hidden, q_vals
 
+
+class TransformerEncoder(nn.Module):
+    num_layers : int
+    input_dim : int # of a token, in our case dim_cap
+    num_heads : int
+    dim_feedforward : int
+    dropout_prob : float
+    init_scale : int
+    use_fast_attention : bool = False
+
+    def setup(self):
+        # TODO: the EncoderBlock doesn't actually use init_scale based on transf_qmix's implementation
+        self.layers = [EncoderBlock(hidden_dim=self.input_dim, 
+                                    num_heads=self.num_heads,
+                                    dim_feedforward=self.dim_feedforward,
+                                    init_scale=self.init_scale,
+                                    use_fast_attention=self.use_fast_attention,
+                                    dropout_prob=self.dropout_prob)
+                       for _ in range(self.num_layers)]
+
+    def __call__(self, x, mask=None, train=True):
+        for l in self.layers:
+            # transf_qmix author renamed this param from train to deterministic
+            x = l(x, mask=mask, deterministic=train)
+        return x
+
+    # def get_attention_maps(self, x, mask=None, train=True):
+    #     # A function to return the attention maps within the model for a single application
+    #     # Used for visualization purpose later
+    #     attention_maps = []
+    #     for l in self.layers:
+    #         _, attn_map = l.self_attn(x, mask=mask)
+    #         attention_maps.append(attn_map)
+    #         x = l(x, mask=mask, train=train)
+    #     return attention_maps
+
+
 class AgentHyperRNN(nn.Module):
     # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
     action_dim: int
@@ -105,7 +144,10 @@ class AgentHyperRNN(nn.Module):
     init_scale: float
     hypernet_dim: int
     hypernet_init_scale: int
-    dim_capabilities: int
+    num_capabilities: int # per agent
+    num_agents: int
+    use_capability_transformer: bool
+    transformer_kwargs: dict
 
     @nn.compact
     def __call__(self, hidden, x):
@@ -113,8 +155,10 @@ class AgentHyperRNN(nn.Module):
 
         # separate obs into capabilities and observations
         # (env gives obs = orig obs+cap)
-        cap = obs[:, :, -self.dim_capabilities:]
-        obs = obs[:, :, :-self.dim_capabilities]
+        # NOTE: this is hardcoded to match simple_spread's computation
+        dim_capabilities = self.num_agents * self.num_capabilities
+        cap = obs[:, :, -dim_capabilities:]
+        obs = obs[:, :, :-dim_capabilities]
 
         # only feed obs through RNN encoder
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
@@ -123,10 +167,30 @@ class AgentHyperRNN(nn.Module):
         rnn_in = (embedding, dones)
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
 
+        # transform capabilities via transformer before passing to cap_hypernet (if flag given)
+        cap_repr = cap
+        if self.use_capability_transformer:
+            # break apart the capabilities by agent, so that attention is applied across agents
+            time_steps, batch_size, _ = cap.shape
+            reshaped_cap = jnp.reshape(cap, (time_steps, batch_size, self.num_agents, self.num_capabilities)) # [..., seq_len, tkn_len]
+
+            # NOTE: rejected using an embedding to preprocess the capabilities as they are already semantically meaningful (and experimental evidence showed poorer performance)
+            transformed_cap = TransformerEncoder(
+                input_dim=self.num_capabilities,
+                num_layers=self.transformer_kwargs["NUM_LAYERS"],
+                num_heads=self.transformer_kwargs["NUM_HEADS"],
+                dim_feedforward=self.transformer_kwargs["DIM_FF"],
+                init_scale=self.transformer_kwargs["INIT_SCALE"],
+                dropout_prob=self.transformer_kwargs["DROPOUT_PROB"],
+            )(reshaped_cap) # TODO: try train flag?
+
+            # only take the transformed version of the ego-agent's capabilities
+            cap_repr = transformed_cap[:, :, 0, :]
+
         # then use capability hypernet for last layer
         num_weights = (self.action_dim * self.hidden_dim)
         num_biases = self.action_dim
-        cap_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights+num_biases, init_scale=self.hypernet_init_scale)(cap)
+        cap_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights+num_biases, init_scale=self.hypernet_init_scale)(cap_repr)
 
         # extract weights + biases from hypernet output
         time_steps, batch_size, obs_dim = obs.shape
@@ -275,9 +339,9 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
         # INIT NETWORK
         # init agent
         if not config["AGENT_HYPERAWARE"]:
-            agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], dim_capabilities=log_train_env.dim_capabilities)
+            agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
         else:
-            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], dim_capabilities=log_train_env.dim_capabilities)
+            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
         rng, _rng = jax.random.split(rng)
 
         if config["PARAMETERS_SHARING"]:
@@ -299,11 +363,11 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
         # log agent param count
         agent_param_count = sum(x.size for x in jax.tree_util.tree_leaves(agent_params))
         wandb.log({"agent_param_count": agent_param_count})
-        # print("-" * 10)
-        # print("DETAILED AGENT PARAM COUNT:")
-        # for name, param in jax.tree_util.tree_flatten_with_path(agent_params)[0]:
-        #     print(f"{name}: {param.shape}")
-        # print("-" * 10)
+        print("-" * 10)
+        print("DETAILED AGENT PARAM COUNT:")
+        for name, param in jax.tree_util.tree_flatten_with_path(agent_params)[0]:
+            print(f"{name}: {param.shape}")
+        print("-" * 10)
 
         # init mixer
         rng, _rng = jax.random.split(rng)
@@ -729,18 +793,26 @@ def main(config):
 
     #config["alg"]["NUM_STEPS"] = config["alg"].get("NUM_STEPS", env.max_steps) # default steps defined by the env
     
+    hyper_tag = "HYPER" if config["alg"]["AGENT_HYPERAWARE"] else "RNN"
+    aware_tag = "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware"
+    cap_transf_tag = "transformed-cap" if config["alg"]["AGENT_USE_CAPABILITY_TRANSFORMER"] else ""
+
+    wandb_tags = [
+        alg_name.upper(),
+        env_name.upper(),
+        hyper_tag,
+        aware_tag,
+        "TD_LOSS" if config["alg"].get("TD_LAMBDA_LOSS", True) else "DQN_LOSS",
+        f"jax_{jax.__version__}",
+    ]
+    if config["alg"]["AGENT_USE_CAPABILITY_TRANSFORMER"]:
+        wandb_tags.append("cap-transformer")
+
     wandb.init(
         entity=config["ENTITY"],
         project=config["PROJECT"],
-        tags=[
-            alg_name.upper(),
-            env_name.upper(),
-            "HYPER" if config["alg"]["AGENT_HYPERAWARE"] else "RNN",
-            "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware",
-            "TD_LOSS" if config["alg"].get("TD_LAMBDA_LOSS", True) else "DQN_LOSS",
-            f"jax_{jax.__version__}",
-        ],
-        name=f'{alg_name}_{env_name}',
+        tags=wandb_tags,
+        name=f'{hyper_tag} {aware_tag} {cap_transf_tag} / {env_name.upper()}',
         config=config,
         mode=config["WANDB_MODE"],
     )
