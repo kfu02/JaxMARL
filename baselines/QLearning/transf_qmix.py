@@ -80,11 +80,22 @@ class EncoderBlock(nn.Module):
         self.norm2 = nn.LayerNorm()
         self.dropout = nn.Dropout(self.dropout_prob)
 
+        # learnable input feature scaling
+        self.input_feature_scaling = self.param('input_feature_scaling', nn.initializers.ones, (self.hidden_dim,)) # TODO: change "hidden_dim" to "input_dim"
+
     def __call__(self, x, mask=None, deterministic=True):
 
-        # Attention part
+        # masking
         if mask is not None and not self.use_fast_attention: # masking is not compatible with fast self attention
             mask = jnp.repeat(nn.make_attention_mask(mask, mask), self.num_heads, axis=-3)
+
+        # input normalization (by z-score, only within team)
+        # x = (x - x.mean(axis=-2, keepdims=True)) / (x.std(axis=-2, keepdims=True) + 1e-9)
+
+        # learnable input feature scaling (apply abs as scaling should not change size)
+        x = x * jnp.abs(self.input_feature_scaling)
+
+        # self attention
         attended = self.self_attn(inputs_q=x, inputs_kv=x, mask=mask, deterministic=deterministic)
 
         x = self.norm1(attended + x)
