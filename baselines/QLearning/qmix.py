@@ -127,21 +127,25 @@ class EncoderBlock(nn.Module):
         self.dropout = nn.Dropout(self.dropout_prob)
 
         # learnable input feature scaling
-        self.input_feature_scaling = self.param('input_feature_scaling', nn.initializers.ones, (self.input_dim,))
+        # self.input_feature_scaling = self.param('input_feature_scaling', nn.initializers.ones, (self.input_dim,))
 
-    def __call__(self, x, mask=None, deterministic=True):
+    def __call__(self, x, mask=None, deterministic=False):
         # masking
         if mask is not None:
             mask = jnp.repeat(nn.make_attention_mask(mask, mask), self.num_heads, axis=-3)
 
-        # input normalization (by z-score, only within team)
-        # x = (x - x.mean(axis=-2, keepdims=True)) / (x.std(axis=-2, keepdims=True) + 1e-9)
+        # input normalization (by z-score, only within team -- makes no assumptions about capability distribution but loses absolute info)
+        x = (x - x.mean(axis=-2, keepdims=True)) / (x.std(axis=-2, keepdims=True) + 1e-9)
 
-        # learnable input feature scaling (apply abs as scaling should not change size)
-        x = x * jnp.abs(self.input_feature_scaling)
+        # learnable input feature scaling (apply abs as scaling should not change sign)
+        # x = x * jnp.abs(self.input_feature_scaling)
 
         # self attention
         attended = self.self_attn(inputs_q=x, inputs_kv=x, mask=mask, deterministic=deterministic)
+
+        # see the effect of attention
+        # if deterministic:
+        #     jax.debug.print("x {} -> attn {}", x, attended)
 
         x = self.norm1(attended + x)
         x = x + self.dropout(x, deterministic=deterministic)
@@ -175,8 +179,7 @@ class TransformerEncoder(nn.Module):
 
     def __call__(self, x, mask=None, train=True):
         for l in self.layers:
-            # transf_qmix author renamed this param from train to deterministic
-            x = l(x, mask=mask, deterministic=train)
+            x = l(x, mask=mask, deterministic=not train)
         return x
 
 
@@ -193,7 +196,7 @@ class AgentHyperRNN(nn.Module):
     transformer_kwargs: dict
 
     @nn.compact
-    def __call__(self, hidden, x):
+    def __call__(self, hidden, x, train=True):
         obs, dones = x
 
         # separate obs into capabilities and observations
@@ -219,7 +222,7 @@ class AgentHyperRNN(nn.Module):
 
             # apply a "positional embedding", but instead of the advanced cos/sin embedding, just add a 0/1 IS_SELF flag a la transfqmix (and IS_SELF should always be applied to the first agent)
             is_self_flag = jnp.zeros((time_steps*batch_size, self.num_agents, 1)).at[:, 0, 0].set(1)
-            reshaped_cap = jnp.concatenate([is_self_flag, reshaped_cap], axis=-1)
+            reshaped_cap = jnp.concatenate([reshaped_cap, is_self_flag], axis=-1)
 
             # NOTE: rejected using an embedding to preprocess the capabilities as they are already semantically meaningful (and experimental evidence showed poorer performance)
             transformer_encoder = TransformerEncoder(
@@ -230,7 +233,9 @@ class AgentHyperRNN(nn.Module):
                 init_scale=self.transformer_kwargs["INIT_SCALE"],
                 dropout_prob=self.transformer_kwargs["DROPOUT_PROB"],
             )
-            transformed_cap = transformer_encoder(reshaped_cap) # TODO: try train flag?
+            transformed_cap = transformer_encoder(reshaped_cap, train=train)
+            # if not train:
+            #     jax.debug.print("orig cap {} -> {}", reshaped_cap[0, ...], transformed_cap[0, ...])
 
             # only take the transformed version of the ego-agent's capabilities
             cap_repr = transformed_cap[:, 0, :].reshape((time_steps, batch_size, -1))
@@ -452,7 +457,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
 
         # depending if using parameters sharing or not, q-values are computed using one or multiple parameters
         if config["PARAMETERS_SHARING"]:
-            def homogeneous_pass(params, hidden_state, obs, dones):
+            def homogeneous_pass(params, hidden_state, obs, dones, train=True):
                 # concatenate agents and parallel envs to process them in one batch
                 agents, flatten_agents_obs = zip(*obs.items())
                 original_shape = flatten_agents_obs[0].shape # assumes obs shape is the same for all agents
@@ -460,7 +465,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                     jnp.concatenate(flatten_agents_obs, axis=1), # (time_step, n_agents*n_envs, obs_size)
                     jnp.concatenate([dones[agent] for agent in agents], axis=1), # ensure to not pass other keys (like __all__)
                 )
-                hidden_state, q_vals = agent.apply(params, hidden_state, batched_input)
+                hidden_state, q_vals = agent.apply(params, hidden_state, batched_input, train=train)
                 q_vals = q_vals.reshape(original_shape[0], len(agents), *original_shape[1:-1], -1) # (time_steps, n_agents, n_envs, action_dim)
                 q_vals = {a:q_vals[:,i] for i,a in enumerate(agents)}
                 return hidden_state, q_vals
@@ -709,7 +714,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 obs_   = {a:last_obs[a] for a in log_test_env.agents}
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
-                hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_)
+                hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_, train=False)
                 actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), q_vals, test_env.valid_actions)
                 obs, env_state, rewards, dones, infos = test_env.batch_step(key_s, env_state, actions)
                 step_state = (params, env_state, obs, dones, hstate, rng)

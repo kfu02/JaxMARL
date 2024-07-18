@@ -17,7 +17,7 @@
   "NUM_LAYERS": 4
   "NUM_HEADS": 1
   "DIM_FF": 64
-  "INIT_SCALE": 0.01 # Xavier init doesn't allow for this, switched to orthogonal which does
+  "INIT_SCALE": 0.01 # NOTE: Xavier init doesn't allow for this, switched to orthogonal which does
   "DROPOUT_PROB": 0.0
 
 "EPSILON_START": 1.0
