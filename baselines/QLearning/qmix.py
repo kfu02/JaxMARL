@@ -126,16 +126,6 @@ class TransformerEncoder(nn.Module):
             x = l(x, mask=mask, deterministic=train)
         return x
 
-    # def get_attention_maps(self, x, mask=None, train=True):
-    #     # A function to return the attention maps within the model for a single application
-    #     # Used for visualization purpose later
-    #     attention_maps = []
-    #     for l in self.layers:
-    #         _, attn_map = l.self_attn(x, mask=mask)
-    #         attention_maps.append(attn_map)
-    #         x = l(x, mask=mask, train=train)
-    #     return attention_maps
-
 
 class AgentHyperRNN(nn.Module):
     # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
@@ -172,20 +162,25 @@ class AgentHyperRNN(nn.Module):
         if self.use_capability_transformer:
             # break apart the capabilities by agent, so that attention is applied across agents
             time_steps, batch_size, _ = cap.shape
-            reshaped_cap = jnp.reshape(cap, (time_steps, batch_size, self.num_agents, self.num_capabilities)) # [..., seq_len, tkn_len]
+            reshaped_cap = jnp.reshape(cap, (time_steps * batch_size, self.num_agents, self.num_capabilities)) # ["batch_size", seq_len, tkn_len]
+
+            # apply a "positional embedding", but instead of the advanced cos/sin embedding, just add a 0/1 IS_SELF flag a la transfqmix (and IS_SELF should always be applied to the first agent)
+            is_self_flag = jnp.zeros((time_steps*batch_size, self.num_agents, 1)).at[:, 0, 0].set(1)
+            reshaped_cap = jnp.concatenate([is_self_flag, reshaped_cap], axis=-1)
 
             # NOTE: rejected using an embedding to preprocess the capabilities as they are already semantically meaningful (and experimental evidence showed poorer performance)
-            transformed_cap = TransformerEncoder(
-                input_dim=self.num_capabilities,
+            transformer_encoder = TransformerEncoder(
+                input_dim=self.num_capabilities+1,
                 num_layers=self.transformer_kwargs["NUM_LAYERS"],
                 num_heads=self.transformer_kwargs["NUM_HEADS"],
                 dim_feedforward=self.transformer_kwargs["DIM_FF"],
                 init_scale=self.transformer_kwargs["INIT_SCALE"],
                 dropout_prob=self.transformer_kwargs["DROPOUT_PROB"],
-            )(reshaped_cap) # TODO: try train flag?
+            )
+            transformed_cap = transformer_encoder(reshaped_cap) # TODO: try train flag?
 
             # only take the transformed version of the ego-agent's capabilities
-            cap_repr = transformed_cap[:, :, 0, :]
+            cap_repr = transformed_cap[:, 0, :].reshape((time_steps, batch_size, -1))
 
         # then use capability hypernet for last layer
         num_weights = (self.action_dim * self.hidden_dim)
