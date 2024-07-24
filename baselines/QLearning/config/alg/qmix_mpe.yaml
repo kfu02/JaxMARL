@@ -11,7 +11,7 @@
 "AGENT_HYPERAWARE": True # bool
 "AGENT_HYPERNET_DIM": 64 # only applies if AGENT_HYPERAWARE=True
 "AGENT_HYPERNET_INIT_SCALE": 0.25 # AGENT_INIT_SCALE/8, chosen arbitrarily
-
+# capability transformer params
 "AGENT_USE_CAPABILITY_TRANSFORMER": True # bool
 "AGENT_TRANSFORMER_KWARGS":
   "NUM_LAYERS": 4

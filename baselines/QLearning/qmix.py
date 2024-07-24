@@ -82,7 +82,7 @@ class AgentRNN(nn.Module):
     init_scale: float
 
     @nn.compact
-    def __call__(self, hidden, x):
+    def __call__(self, hidden, x, train=False):
         obs, dones = x
 
         # NOTE: SimpleSpread gives obs as obs+cap (concatenated) and zeroes out
@@ -191,20 +191,21 @@ class AgentHyperRNN(nn.Module):
     hypernet_dim: int
     hypernet_init_scale: int
     num_capabilities: int # per agent
-    num_agents: int
+    num_agents: int # on team
     use_capability_transformer: bool
     transformer_kwargs: dict
 
     @nn.compact
     def __call__(self, hidden, x, train=True):
-        obs, dones = x
+        full_obs, dones = x
+        # separate obs into capabilities and observations (env gives full_obs = orig_obs + cap_info)
+        # NOTE: this is hardcoded to match env's computation 
+        # TODO: change that^?
+        dim_capabilities = self.num_agents * self.num_capabilities 
+        obs = full_obs[:, :, :-dim_capabilities]
+        cap = full_obs[:, :, -dim_capabilities:]
 
-        # separate obs into capabilities and observations
-        # (env gives obs = orig obs+cap)
-        # NOTE: this is hardcoded to match simple_spread's computation
-        dim_capabilities = self.num_agents * self.num_capabilities
-        cap = obs[:, :, -dim_capabilities:]
-        obs = obs[:, :, :-dim_capabilities]
+        # jax.debug.print("full obs {}, obs {}, cap {}", full_obs[0, 0, :], obs[0, 0, :], cap[0, 0, :])
 
         # only feed obs through RNN encoder
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
@@ -394,7 +395,13 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
         if not config["AGENT_HYPERAWARE"]:
             agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
         else:
-            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+            # TODO(issue): SMAX has allied agents vs enemy agents, while MPE SimpleSpread does not, and we only assume known capabilities for allies
+            # for now I am hardcoding the fix but I should pass in some flag OR rename SimpleSpread's to num_allies, to keep SMAX the priority
+
+            # MPE SimpleSpread
+            # agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+            # SMAX (note the num_agents=log_train_env.num_allies arg)
+            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_allies, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
         rng, _rng = jax.random.split(rng)
 
         if config["PARAMETERS_SHARING"]:
@@ -778,7 +785,8 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             first_infos   = jax.tree.map(lambda i: jax.vmap(first_episode_returns, in_axes=1)(i[..., 0], all_dones), infos)
             metrics = {
                 'test_returns': first_returns['__all__'],# episode returns
-                'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
+                # TODO: this metric only works for MPE, figure out how to toggle correctly
+                # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
                 **{'test_'+k:v for k,v in first_infos.items()},
             }
             if config.get('VERBOSE', False):
@@ -829,9 +837,12 @@ def main(config):
     if 'smax' in env_name.lower():
         config['env']['ENV_KWARGS']['scenario'] = map_name_to_scenario(config['env']['MAP_NAME'])
         env_name = f"{config['env']['ENV_NAME']}_{config['env']['MAP_NAME']}"
-        orig_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
-        env = SMAXLogWrapper(orig_env)
-        # TODO: add test_env to smax
+
+        train_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
+        log_train_env = SMAXLogWrapper(train_env)
+        # TODO: drop the viz from viz_test_env
+        viz_test_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS']) # TODO: add this for eval sampling reasons: , test_env_flag=True)
+        log_test_env = SMAXLogWrapper(viz_test_env)
    # overcooked needs a layout 
     elif 'overcooked' in env_name.lower():
         # NOTE: overcooked will not work with current pipeline
@@ -914,6 +925,9 @@ def main(config):
                     video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
                     visualizer.animate(video_fpath)
                     wandb.log({f"env-{env}-seed-{seed}-rollout": wandb.Video(video_fpath)})
+
+    # must be called after wandb.init() for multiruns to work correctly
+    wandb.finish()
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,10 @@
 "ENV_NAME": "HeuristicEnemySMAX"
-"MAP_NAME": "2s3z"
+"MAP_NAME": "3s5z"
 "ENV_KWARGS":
   "see_enemy_actions": True
   "walls_cause_death": True
   "attack_mode": "closest"
+
+  "capability_aware": True
+  "num_capabilities": 7 # must be 7 as specified by game engine
+  # TODO: figure out how to specify custom agent_capabilities for train test split

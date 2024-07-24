@@ -15,7 +15,8 @@ class SimpleSpreadMPE(SimpleMPE):
         num_landmarks=3,
         local_ratio=0.5,
         action_type=DISCRETE_ACT,
-        capability_aware=True,
+        capability_aware=False,
+        num_capabilities=2,
         **kwargs,
     ):
         dim_c = 0  # NOTE follows code rather than docs
@@ -27,7 +28,7 @@ class SimpleSpreadMPE(SimpleMPE):
 
         # our capabilities + full team capabilities
         self.capability_aware = capability_aware
-        self.num_capabilities = kwargs["num_capabilities"]
+        self.num_capabilities = num_capabilities
         self.dim_capabilities = num_agents * self.num_capabilities
 
         observation_spaces = {

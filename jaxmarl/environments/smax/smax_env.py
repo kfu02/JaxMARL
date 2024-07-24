@@ -143,6 +143,8 @@ class SMAX(MultiAgentEnv):
         smacv2_unit_type_generation=False,
         observation_type="unit_list",
         action_type="discrete",
+        capability_aware=False,
+        num_capabilities=7,
     ) -> None:
         self.num_allies = num_allies if scenario is None else scenario.num_allies
         self.num_enemies = num_enemies if scenario is None else scenario.num_enemies
@@ -218,6 +220,13 @@ class SMAX(MultiAgentEnv):
         self.unit_features += [
             f"unit_type_bits_{i}" for i in range(self.unit_type_bits)
         ]
+
+        # our capabilities + full teammate capabilities
+        # NOTE: assuming enemy capabilities are hidden
+        self.capability_aware = capability_aware
+        self.num_capabilities = num_capabilities
+        self.dim_capabilities = self.num_allies * self.num_capabilities
+
         self.obs_size = self._get_obs_size()
         self.state_size = (len(self.own_features) + 2) * self.num_agents
         self.observation_spaces = {
@@ -250,11 +259,13 @@ class SMAX(MultiAgentEnv):
                 len(self.unit_features) * (self.num_allies - 1)
                 + len(self.unit_features) * self.num_enemies
                 + len(self.own_features)
+                # adding extra fields for capabilities (or zero mask)
+                + self.dim_capabilities 
             )
-        elif self.observation_type == "conic":
-            return len(self.unit_features) * (
-                self.num_sections * self.max_units_per_section
-            ) + len(self.own_features)
+        # elif self.observation_type == "conic":
+        #     return len(self.unit_features) * (
+        #         self.num_sections * self.max_units_per_section
+        #     ) + len(self.own_features)
         else:
             raise ValueError("Provided observation type is not valid")
 
@@ -749,6 +760,8 @@ class SMAX(MultiAgentEnv):
             )
             features = features.at[1:3].set(state.unit_positions[i])
             features = features.at[3].set(state.unit_weapon_cooldowns[i])
+            # NOTE: one-hot encoding of unit class (class ID)
+            # NOTE: not sure if I should mess with this as it's not clear to me where get_world_state() is called (definitely not in QMIX)
             features = features.at[4 + state.unit_types[i]].set(1)
             return jax.lax.cond(
                 state.unit_alive[i], lambda: features, lambda: empty_features
@@ -764,8 +777,10 @@ class SMAX(MultiAgentEnv):
     def get_obs(self, state: State) -> Dict[str, chex.Array]:
         if self.observation_type == "unit_list":
             return self.get_obs_unit_list(state)
-        elif self.observation_type == "conic":
-            return self.get_obs_conic(state)
+
+        # NOTE: I have no idea what "conic" does, it's not listed in the docs or the paper
+        # elif self.observation_type == "conic":
+        #     return self.get_obs_conic(state)
 
     def get_obs_conic(self, state: State) -> Dict[str, chex.Array]:
         def get_features(i: int):
@@ -844,7 +859,8 @@ class SMAX(MultiAgentEnv):
         features = features.at[3:5].set(move_action_obs)
         features = features.at[5].set(attack_action_obs)
         features = features.at[6].set(state.unit_weapon_cooldowns[j_idx])
-        features = features.at[7 + state.unit_types[j_idx]].set(1)
+        # NOTE: one-hot encoding of unit class (class ID)
+        # features = features.at[7 + state.unit_types[j_idx]].set(1)
         return features
 
     @partial(jax.jit, static_argnums=(0,))
@@ -857,10 +873,38 @@ class SMAX(MultiAgentEnv):
             state.unit_positions[i] / jnp.array([self.map_width, self.map_height])
         )
         features = features.at[3].set(state.unit_weapon_cooldowns[i])
-        features = features.at[4 + state.unit_types[i]].set(1)
-        return jax.lax.cond(
+        # NOTE: one-hot encoding of unit class (class ID)
+        # features = features.at[4 + state.unit_types[i]].set(1)
+        original_own_features = jax.lax.cond(
             state.unit_alive[i], lambda: features, lambda: empty_features
         )
+
+        # zero-out capabilities for non-capability-aware baselines
+        ego_capabilities = jnp.zeros((self.dim_capabilities))
+
+        if self.capability_aware:
+            def get_unit_cap(unit_type):
+                unit_cap = jnp.array([
+                    self.unit_type_velocities[unit_type],
+                    self.unit_type_weapon_cooldowns[unit_type],
+                    self.unit_type_attacks[unit_type],
+                    self.unit_type_attack_ranges[unit_type],
+                    self.unit_type_sight_ranges[unit_type],
+                    self.unit_type_radiuses[unit_type],
+                    self.unit_type_health[unit_type],
+                ])
+                return unit_cap
+
+            # add team's capabilities to obs, with ego-agent first
+            # NOTE: assumes we can only see ally capabilities
+            ally_units = state.unit_types[:self.num_allies]
+            ego_unit_types = jnp.roll(ally_units, -i)
+            get_all_caps = jax.vmap(get_unit_cap)
+            ego_capabilities = get_all_caps(ego_unit_types)
+            ego_capabilities = ego_capabilities.ravel()
+
+        # return original features + capabilities (which itself is appended to info about other agents, see get_obs_unit_list())
+        return jnp.concatenate([original_own_features, ego_capabilities])
 
     def get_obs_unit_list(self, state: State) -> Dict[str, chex.Array]:
         """Applies observation function to state."""
