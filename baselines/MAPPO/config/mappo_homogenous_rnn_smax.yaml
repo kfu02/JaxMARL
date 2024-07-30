@@ -2,7 +2,7 @@
 "NUM_ENVS": 128
 "NUM_STEPS": 128 
 "TOTAL_TIMESTEPS": 1e7
-"FC_DIM_SIZE": 128
+"FC_DIM_SIZE": 128 # TODO: why can't I change this to 256?
 "GRU_HIDDEN_DIM": 128
 "UPDATE_EPOCHS": 4
 "NUM_MINIBATCHES": 4
@@ -14,10 +14,11 @@
 "VF_COEF": 0.5
 "MAX_GRAD_NORM": 0.25
 "ACTIVATION": "relu"
-"OBS_WITH_AGENT_ID": True
+"OBS_WITH_AGENT_ID": False # True
 "ENV_NAME": "HeuristicEnemySMAX"
-"MAP_NAME": "2s3z"
+"MAP_NAME": "3M3z"
 "SEED": 0
+"NUM_SEEDS": 3
 "ENV_KWARGS": 
   "see_enemy_actions": True
   "walls_cause_death": True
@@ -25,6 +26,7 @@
 "ANNEAL_LR": True
 
 # WandB Params
-"WANDB_MODE": "disabled"
-"ENTITY": ""
-"PROJECT": ""
+"ENTITY": "star-lab-gt"
+"PROJECT": "JaxMARL"
+"WANDB_MODE": "online"
+"RUN_NAME": "class-id"

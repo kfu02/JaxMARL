@@ -42,9 +42,12 @@ class Scenario:
 
 MAP_NAME_TO_SCENARIO = {
     # name: (unit_types, n_allies, n_enemies, SMACv2 position generation, SMACv2 unit generation)
+    "3M3z": Scenario( # z = zerg
+        jnp.array([1, 1, 1, 4, 4, 4] * 2, dtype=jnp.uint8), 6, 6, True, False
+    ),
     "3m": Scenario(jnp.zeros((6,), dtype=jnp.uint8), 3, 3, False, False),
     "2s3z": Scenario(
-        jnp.array([2, 2, 3, 3, 3] * 2, dtype=jnp.uint8), 5, 5, False, False
+        jnp.array([2, 2, 3, 3, 3] * 2, dtype=jnp.uint8), 5, 5, True, False
     ),
     "25m": Scenario(jnp.zeros((50,), dtype=jnp.uint8), 25, 25, False, False),
     "3s5z": Scenario(
@@ -760,8 +763,7 @@ class SMAX(MultiAgentEnv):
             )
             features = features.at[1:3].set(state.unit_positions[i])
             features = features.at[3].set(state.unit_weapon_cooldowns[i])
-            # NOTE: one-hot encoding of unit class (class ID)
-            # NOTE: not sure if I should mess with this as it's not clear to me where get_world_state() is called (definitely not in QMIX)
+            # NOTE: one-hot encoding of unit class (class ID) -- only for centralised critics
             features = features.at[4 + state.unit_types[i]].set(1)
             return jax.lax.cond(
                 state.unit_alive[i], lambda: features, lambda: empty_features
@@ -860,7 +862,7 @@ class SMAX(MultiAgentEnv):
         features = features.at[5].set(attack_action_obs)
         features = features.at[6].set(state.unit_weapon_cooldowns[j_idx])
         # NOTE: one-hot encoding of unit class (class ID)
-        # features = features.at[7 + state.unit_types[j_idx]].set(1)
+        features = features.at[7 + state.unit_types[j_idx]].set(1)
         return features
 
     @partial(jax.jit, static_argnums=(0,))
@@ -874,7 +876,7 @@ class SMAX(MultiAgentEnv):
         )
         features = features.at[3].set(state.unit_weapon_cooldowns[i])
         # NOTE: one-hot encoding of unit class (class ID)
-        # features = features.at[4 + state.unit_types[i]].set(1)
+        features = features.at[4 + state.unit_types[i]].set(1)
         original_own_features = jax.lax.cond(
             state.unit_alive[i], lambda: features, lambda: empty_features
         )

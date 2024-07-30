@@ -135,7 +135,7 @@ class EncoderBlock(nn.Module):
             mask = jnp.repeat(nn.make_attention_mask(mask, mask), self.num_heads, axis=-3)
 
         # input normalization (by z-score, only within team -- makes no assumptions about capability distribution but loses absolute info)
-        x = (x - x.mean(axis=-2, keepdims=True)) / (x.std(axis=-2, keepdims=True) + 1e-9)
+        # x = (x - x.mean(axis=-2, keepdims=True)) / (x.std(axis=-2, keepdims=True) + 1e-9)
 
         # learnable input feature scaling (apply abs as scaling should not change sign)
         # x = x * jnp.abs(self.input_feature_scaling)
@@ -239,20 +239,24 @@ class AgentHyperRNN(nn.Module):
             #     jax.debug.print("orig cap {} -> {}", reshaped_cap[0, ...], transformed_cap[0, ...])
 
             # only take the transformed version of the ego-agent's capabilities
-            cap_repr = transformed_cap[:, 0, :].reshape((time_steps, batch_size, -1))
+            # cap_repr = transformed_cap[:, 0, :].reshape((time_steps, batch_size, -1))
 
-        # then use capability hypernet for last layer
-        num_weights = (self.action_dim * self.hidden_dim)
-        num_biases = self.action_dim
-        cap_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights+num_biases, init_scale=self.hypernet_init_scale)(cap_repr)
+            # mean pool all output tokens (across n_agents), then reshape leading dims for hypernet
+            cap_repr = jnp.mean(transformed_cap, axis=1).reshape((time_steps, batch_size, -1))
 
-        # extract weights + biases from hypernet output
+        # then use capability hypernet to build last target layer
         time_steps, batch_size, obs_dim = obs.shape
-        weights = cap_hypernet[:, :, :num_weights].reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
-        biases = cap_hypernet[:, :, -num_biases:].reshape(time_steps, batch_size, 1, self.action_dim)
+
+        num_weights = (self.action_dim * self.hidden_dim)
+        weights = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)(cap_repr)
+        weights = weights.reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
+
+        num_biases = self.action_dim
+        biases = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=self.hypernet_init_scale)(cap_repr)
+        biases = biases.reshape(time_steps, batch_size, 1, self.action_dim)
 
         # manually calculate q_vals = (embedding @ weights) + b
-        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
+        # NOTE: the slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
         # with leading dims for time_steps, batch_size
         q_vals = jnp.matmul(embedding[:, :, None, :], weights) + biases
         q_vals = q_vals.squeeze(axis=2) # remove extra dim needed for computation

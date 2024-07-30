@@ -584,13 +584,26 @@ def main(config):
         entity=config["ENTITY"],
         project=config["PROJECT"],
         tags=["MAPPO", "RNN", config["MAP_NAME"]],
+        # TODO: add the custom tagging from QMIX
+        name=config["RUN_NAME"] if config["RUN_NAME"] else None,
         config=config,
         mode=config["WANDB_MODE"],
     )
+
+    # original:
+    # rng = jax.random.PRNGKey(config["SEED"])
+    # with jax.disable_jit(False):
+    #     train_jit = jax.jit(make_train(config)) 
+    #     out = train_jit(rng)
+
+    # multi-seed training from QMIX:
     rng = jax.random.PRNGKey(config["SEED"])
-    with jax.disable_jit(False):
-        train_jit = jax.jit(make_train(config)) 
-        out = train_jit(rng)
+    rngs = jax.random.split(rng, config["NUM_SEEDS"])
+    train_vjit = jax.jit(jax.vmap(make_train(config)))
+    outs = jax.block_until_ready(train_vjit(rngs))
+
+    # must be called after wandb.init() for multiruns to work correctly
+    wandb.finish()
 
     
 if __name__=="__main__":
