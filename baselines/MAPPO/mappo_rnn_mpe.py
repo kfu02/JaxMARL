@@ -122,6 +122,173 @@ class ActorRNN(nn.Module):
         return hidden, pi
 
 
+# for transformer
+class EncoderBlock(nn.Module):
+    input_dim : int  # Input dimension is needed here since it is equal to the output dimension (residual connection)
+    num_heads : int  # NOTE: input must be divisible by num_heads
+    dim_feedforward : int
+    init_scale: float
+    dropout_prob : float = 0.
+
+    def setup(self):
+        # Attention layer
+        self.self_attn = nn.MultiHeadDotProductAttention(
+            num_heads=self.num_heads,
+            dropout_rate=self.dropout_prob,
+            kernel_init=nn.initializers.xavier_uniform(),
+            use_bias=False,
+        )
+
+        # Two-layer MLP
+        self.linear = [
+            nn.Dense(self.dim_feedforward, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0)),
+            nn.Dense(self.input_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))
+        ]
+        # Layers to apply in between the main layers
+        self.norm1 = nn.LayerNorm()
+        self.norm2 = nn.LayerNorm()
+        self.dropout = nn.Dropout(self.dropout_prob)
+
+    def __call__(self, x, mask=None, deterministic=False):
+        # masking
+        if mask is not None:
+            mask = jnp.repeat(nn.make_attention_mask(mask, mask), self.num_heads, axis=-3)
+
+        # self attention
+        attended = self.self_attn(inputs_q=x, inputs_kv=x, mask=mask, deterministic=deterministic)
+
+        # see the effect of attention
+        # if deterministic:
+        #     jax.debug.print("x {} -> attn {}", x, attended)
+
+        x = self.norm1(attended + x)
+        x = x + self.dropout(x, deterministic=deterministic)
+
+        # MLP part
+        feedforward = self.linear[0](x)
+        feedforward = nn.relu(feedforward)
+        feedforward = self.linear[1](feedforward)
+
+        x = self.norm2(feedforward+x)
+        x = x + self.dropout(x, deterministic=deterministic)
+
+        return x
+
+
+class TransformerEncoder(nn.Module):
+    num_layers : int
+    input_dim : int # of a token, in our case dim_cap
+    num_heads : int
+    dim_feedforward : int
+    dropout_prob : float
+    init_scale : int
+
+    def setup(self):
+        self.layers = [EncoderBlock(input_dim=self.input_dim, 
+                                    num_heads=self.num_heads,
+                                    dim_feedforward=self.dim_feedforward,
+                                    init_scale=self.init_scale,
+                                    dropout_prob=self.dropout_prob)
+                       for _ in range(self.num_layers)]
+
+    def __call__(self, x, mask=None, train=True):
+        for l in self.layers:
+            x = l(x, mask=mask, deterministic=not train)
+        return x
+
+class HyperNetwork(nn.Module):
+    hidden_dim: int
+    output_dim: int
+    init_scale: float
+
+    @nn.compact
+    def __call__(self, x):
+        x = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(x)
+        x = nn.relu(x)
+        x = nn.Dense(self.output_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(x)
+        return x
+
+
+class ActorHyperRNN(nn.Module):
+    action_dim: Sequence[int]
+    num_agents: int
+    num_capabilities: int
+    config: Dict
+
+    @nn.compact
+    def __call__(self, hidden, x, train=True):
+        full_obs, dones = x
+        # separate obs into capabilities and observations (env gives full_obs = orig_obs + cap_info)
+        # NOTE: this is hardcoded to match env's computation 
+        dim_capabilities = self.num_agents * self.num_capabilities 
+        obs = full_obs[:, :, :-dim_capabilities]
+        cap = full_obs[:, :, -dim_capabilities:]
+
+        jax.debug.print("full obs {}, obs {}, cap {}", full_obs[0, 0, :], obs[0, 0, :], cap[0, 0, :])
+
+        # only feed obs through RNN encoder
+        embedding = nn.Dense(self.config["FC_DIM_SIZE"], kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(obs)
+        embedding = nn.relu(embedding)
+
+        rnn_in = (embedding, dones)
+        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+
+        # transform capabilities via transformer before passing to cap_hypernet (if flag given)
+        cap_repr = cap
+        if self.config["USE_TRANSFORMER"]:
+            # break apart the capabilities by agent, so that attention is applied across agents
+            time_steps, batch_size, _ = cap.shape
+            reshaped_cap = jnp.reshape(cap, (time_steps * batch_size, self.num_agents, self.num_capabilities)) # ["batch_size", seq_len, tkn_len]
+
+            # apply a "positional embedding", but instead of the advanced cos/sin embedding, just add a 0/1 IS_SELF flag a la transfqmix (and IS_SELF should always be applied to the first agent)
+            is_self_flag = jnp.zeros((time_steps*batch_size, self.num_agents, 1)).at[:, 0, 0].set(1)
+            reshaped_cap = jnp.concatenate([reshaped_cap, is_self_flag], axis=-1)
+
+            # NOTE: rejected using an embedding to preprocess the capabilities as they are already semantically meaningful (and experimental evidence showed poorer performance)
+            transformer_encoder = TransformerEncoder(
+                input_dim=self.num_capabilities+1,
+                num_layers=self.config["TRANSFORMER_KWARGS"]["NUM_LAYERS"],
+                num_heads=self.config["TRANSFORMER_KWARGS"]["NUM_HEADS"],
+                dim_feedforward=self.config["TRANSFORMER_KWARGS"]["DIM_FF"],
+                init_scale=self.config["TRANSFORMER_KWARGS"]["INIT_SCALE"],
+                dropout_prob=self.config["TRANSFORMER_KWARGS"]["DROPOUT_PROB"],
+            )
+            transformed_cap = transformer_encoder(reshaped_cap, train=train)
+            # if not train:
+            #     jax.debug.print("orig cap {} -> {}", reshaped_cap[0, ...], transformed_cap[0, ...])
+
+            # mean pool all output tokens (across n_agents), then reshape leading dims for hypernet
+            cap_repr = jnp.mean(transformed_cap, axis=1).reshape((time_steps, batch_size, -1))
+
+        # build a two-layer, hypernetwork controlled MLP to output actions, matching the ActorRNN above
+        time_steps, batch_size, _ = obs.shape
+
+        # hypernet layers
+        # NOTE: the original ActorRNN has kernel_init=ortho(2) for the first layer, kernel_init=ortho(0.01), zero-bias for both
+        # here I keep both init values, but divide both by 8 because I vaguely remember seeing this somewhere else
+        w_1 = HyperNetwork(hidden_dim=self.config["HYPERNET_DIM"], output_dim=(self.config["GRU_HIDDEN_DIM"] * self.config["TARGET_DIM"]), init_scale=2/8)(cap_repr)
+        w_1 = w_1.reshape(time_steps, batch_size, self.config["GRU_HIDDEN_DIM"], self.config["TARGET_DIM"])
+        
+        b_1 = HyperNetwork(hidden_dim=self.config["HYPERNET_DIM"], output_dim=self.config["TARGET_DIM"], init_scale=2/8)(cap_repr)
+        b_1 = b_1.reshape(time_steps, batch_size, 1, self.config["TARGET_DIM"])
+
+        w_2 = HyperNetwork(hidden_dim=self.config["HYPERNET_DIM"], output_dim=(self.config["TARGET_DIM"] * self.action_dim), init_scale=0.01/8)(cap_repr)
+        w_2 = w_2.reshape(time_steps, batch_size, self.config["TARGET_DIM"], self.action_dim)
+        
+        b_2 = HyperNetwork(hidden_dim=self.config["HYPERNET_DIM"], output_dim=self.action_dim, init_scale=0.01/8)(cap_repr)
+        b_2 = b_2.reshape(time_steps, batch_size, 1, self.action_dim)
+
+        # target net layers
+        action_logits = embedding[:, :, None, :] @ w_1 + b_1 # slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
+        action_logits = nn.relu(action_logits)
+        action_logits = action_logits @ w_2 + b_2
+        action_logits = action_logits.squeeze(axis=2) # remove extra dim needed for computation
+
+        pi = distrax.Categorical(logits=action_logits)
+
+        return hidden, pi
+
+
 class CriticRNN(nn.Module):
     config: Dict
     
@@ -192,7 +359,16 @@ def make_train(config):
 
     def train(rng):
         # INIT NETWORK
-        actor_network = ActorRNN(env.action_space(env.agents[0]).n, config=config)
+        if config["USE_HYPERNET"]:
+            actor_network = ActorHyperRNN(
+                action_dim=env.action_space(env.agents[0]).n, 
+                num_agents=len(env.agents),
+                num_capabilities=env.num_capabilities,
+                config=config,
+            )
+        else:
+            actor_network = ActorRNN(env.action_space(env.agents[0]).n, config=config)
+
         critic_network = CriticRNN(config=config)
         rng, _rng_actor, _rng_critic = jax.random.split(rng, 3)
         ac_init_x = (
@@ -201,6 +377,15 @@ def make_train(config):
         )
         ac_init_hstate = ScannedRNN.initialize_carry(config["NUM_ENVS"], config["GRU_HIDDEN_DIM"])
         actor_network_params = actor_network.init(_rng_actor, ac_init_hstate, ac_init_x)
+
+        # log actor param count
+        actor_param_count = sum(x.size for x in jax.tree_util.tree_leaves(actor_network_params))
+        wandb.log({"actor_param_count": actor_param_count})
+        print("-" * 10)
+        print("detailed actor architecture:")
+        for name, param in jax.tree_util.tree_flatten_with_path(actor_network_params)[0]:
+            print(f"{name}: {param.shape}")
+        print("-" * 10)
         
         cr_init_x = (
             jnp.zeros((1, config["NUM_ENVS"], env.world_state_size(),)),  #  + env.observation_space(env.agents[0]).shape[0]
@@ -497,6 +682,8 @@ def make_train(config):
             metric["loss"] = loss_info
             rng = update_state[-1]
 
+            # TODO: add test loop here, visualize policy
+
             def callback(metric):
                 
                 wandb.log(
@@ -533,19 +720,34 @@ def make_train(config):
 
 @hydra.main(version_base=None, config_path="config", config_name="mappo_homogenous_rnn_mpe")
 def main(config):
+    hyper_tag = "HYPER" if config["USE_HYPERNET"] else "RNN"
+    aware_tag = "aware" if config["ENV_KWARGS"]["capability_aware"] else "unaware"
+    cap_transf_tag = "transformer" if config["USE_TRANSFORMER"] else "no-transformer"
 
     config = OmegaConf.to_container(config)
     wandb.init(
         entity=config["ENTITY"],
         project=config["PROJECT"],
-        tags=["MAPPO", "RNN", config["ENV_NAME"]],
+        tags=["MAPPO", config["ENV_NAME"], hyper_tag, aware_tag, cap_transf_tag, f"jax_{jax.__version__}"],
+        name=f'{hyper_tag} {aware_tag} {cap_transf_tag} / MAPPO / {config["ENV_NAME"]}',
         config=config,
         mode=config["WANDB_MODE"],
     )
+
+    # original code
+    # rng = jax.random.PRNGKey(config["SEED"])
+    # with jax.disable_jit(False):
+    #     train_jit = jax.jit(make_train(config)) 
+    #     out = train_jit(rng)
+
+    # multi-seed training, adapted from qmix
     rng = jax.random.PRNGKey(config["SEED"])
-    with jax.disable_jit(False):
-        train_jit = jax.jit(make_train(config)) 
-        out = train_jit(rng)
+    rngs = jax.random.split(rng, config["NUM_SEEDS"])
+    train_vjit = jax.jit(jax.vmap(make_train(config)))
+    outs = jax.block_until_ready(train_vjit(rngs))
+
+    # must be called after wandb.init() for multiruns to work correctly
+    wandb.finish()
 
     
 if __name__=="__main__":

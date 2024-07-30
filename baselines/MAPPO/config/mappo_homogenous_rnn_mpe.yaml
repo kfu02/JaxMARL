@@ -1,9 +1,46 @@
-"LR": 2e-3
+"SEED": 76
+"NUM_SEEDS": 5
+
+"ENV_NAME": "MPE_simple_spread_v3"
+"ENV_KWARGS":
+  "num_agents": 3
+  "num_landmarks": 3
+
+  "capability_aware": True
+
+  # capabilities implemented in MPE_simple_spread_v3: [accel, rad]
+  # default accel in MPE is 5 (applies even for discrete actions)
+  # default rad for agents is 0.15 (for landmarks is 0.05)
+  "num_capabilities": 2
+  # [[rad, accel]_1, [r, a]_2, ...]
+  "agent_capabilities": [[0.20, 5], [0.12, 5], [0.15, 5], [0.12, 5], [0.15, 5]]
+  "test_capabilities": [[0.3, 5], [0.08, 5], [0.08, 5]]
+
+# actor architecture
+"FC_DIM_SIZE": 128
+"GRU_HIDDEN_DIM": 128
+
+# hypernet architecture
+"USE_HYPERNET": True
+# NOTE: hypernet is always a [2 x HYPERNET_DIM] MLP w/ ReLU
+"HYPERNET_DIM": 64
+"TARGET_DIM": 128
+
+# capability transformer architecture
+"USE_TRANSFORMER": False
+"TRANSFORMER_KWARGS":
+  "NUM_LAYERS": 4
+  "NUM_HEADS": 1
+  "DIM_FF": 64
+  "INIT_SCALE": 0.01 # NOTE: Xavier init doesn't allow for this, switched to orthogonal which does
+  "DROPOUT_PROB": 0.0
+
 "NUM_ENVS": 16 
 "NUM_STEPS": 128 
 "TOTAL_TIMESTEPS": 2e7
-"FC_DIM_SIZE": 128
-"GRU_HIDDEN_DIM": 128
+
+"LR": 2e-3
+"ANNEAL_LR": True
 "UPDATE_EPOCHS": 4
 "NUM_MINIBATCHES": 4
 "GAMMA": 0.99
@@ -13,14 +50,8 @@
 "ENT_COEF": 0.01
 "VF_COEF": 0.5
 "MAX_GRAD_NORM": 0.5
-"ACTIVATION": "tanh"
-"ENV_NAME": "MPE_simple_spread_v3"
-"SEED": 1
-"NUM_SEEDS": 2
-"ENV_KWARGS": {}
-"ANNEAL_LR": True
 
 # WandB Params
-"WANDB_MODE": "disabled"
-"ENTITY": ""
-"PROJECT": ""
+"ENTITY": "star-lab-gt"
+"PROJECT": "JaxMARL"
+"WANDB_MODE": "online"
