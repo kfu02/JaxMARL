@@ -55,12 +55,21 @@ class MPEVisualizer(object):
         self.ax.set_ylim([-ax_lim, ax_lim])
         
         self.entity_artists = []
+        self.sensing_rad_artists = []
         for i in range(self.env.num_entities):
             c = Circle(
                 state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
             )
             self.ax.add_patch(c)
             self.entity_artists.append(c)
+
+            # draw the outline for the sensing radius, if it exists (SimpleSpread)
+            if self.env.sensing_rads is not None:
+                sensing_rad = Circle(
+                    state.p_pos[i], self.env.sensing_rads[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
+                )
+                self.ax.add_patch(sensing_rad)
+                self.sensing_rad_artists.append(sensing_rad)
             
         self.step_counter = self.ax.text(-1.95, 1.95, f"Step: {state.step}", va="top")
         
@@ -81,6 +90,9 @@ class MPEVisualizer(object):
         state = self.state_seq[frame]
         for i, c in enumerate(self.entity_artists):
             c.center = state.p_pos[i]
+            # also update the sensing radius, if necessary
+            if self.sensing_rad_artists:
+                self.sensing_rad_artists[i].center = state.p_pos[i]
             
         self.step_counter.set_text(f"Step: {state.step}")
         

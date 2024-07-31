@@ -82,7 +82,7 @@ class AgentRNN(nn.Module):
     init_scale: float
 
     @nn.compact
-    def __call__(self, hidden, x):
+    def __call__(self, hidden, x, train=False):
         obs, dones = x
 
         # NOTE: SimpleSpread gives obs as obs+cap (concatenated) and zeroes out
@@ -740,6 +740,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             )
 
             # compute the pct of landmarks covered by an agent at the final timestep (across all envs)
+            # TODO: this only works for SimpleSpread, toggle it automatically somehow
             def pct_landmarks_covered(final_step_state):
                 final_env_state = final_step_state[1].env_state
                 p_pos = final_env_state.p_pos
@@ -778,7 +779,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             first_infos   = jax.tree.map(lambda i: jax.vmap(first_episode_returns, in_axes=1)(i[..., 0], all_dones), infos)
             metrics = {
                 'test_returns': first_returns['__all__'],# episode returns
-                'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
+                # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
                 **{'test_'+k:v for k,v in first_infos.items()},
             }
             if config.get('VERBOSE', False):
@@ -848,24 +849,23 @@ def main(config):
     
     hyper_tag = "HYPER" if config["alg"]["AGENT_HYPERAWARE"] else "RNN"
     aware_tag = "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware"
-    cap_transf_tag = "transformed-cap" if config["alg"]["AGENT_USE_CAPABILITY_TRANSFORMER"] else ""
+    cap_transf_tag = "transformer" if config["alg"]["AGENT_USE_CAPABILITY_TRANSFORMER"] else "no-transformer"
 
     wandb_tags = [
         alg_name.upper(),
-        env_name.upper(),
+        env_name,
         hyper_tag,
         aware_tag,
+        cap_transf_tag,
         "TD_LOSS" if config["alg"].get("TD_LAMBDA_LOSS", True) else "DQN_LOSS",
         f"jax_{jax.__version__}",
     ]
-    if config["alg"]["AGENT_USE_CAPABILITY_TRANSFORMER"]:
-        wandb_tags.append("cap-transformer")
 
     wandb.init(
         entity=config["ENTITY"],
         project=config["PROJECT"],
         tags=wandb_tags,
-        name=f'{hyper_tag} {aware_tag} {cap_transf_tag} / {env_name.upper()}',
+        name=f'{hyper_tag} {aware_tag} {cap_transf_tag} / {env_name}',
         config=config,
         mode=config["WANDB_MODE"],
     )

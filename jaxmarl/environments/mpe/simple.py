@@ -122,9 +122,15 @@ class SimpleMPE(MultiAgentEnv):
         self.max_steps = max_steps
         self.dt = dt
 
-        if "agent_capabilities" in kwargs:
-            # save list of capabilities to be sampled from later (see reset())
-            self.agent_capabilities = jnp.asarray(kwargs["agent_capabilities"])
+        if "agent_rads" in kwargs:
+            self.agent_rads = kwargs["agent_rads"]
+            assert (len(self.agent_rads) >= self.num_agents), f"Not enough agent_rads, {len(self.agent_rads)} < {self.num_agents}"
+            self.agent_rads = jnp.array(self.agent_rads)
+
+        if "agent_accels" in kwargs:
+            self.agent_accels = kwargs["agent_accels"]
+            assert (len(self.agent_accels) >= self.num_agents), f"Not enough agent_accels, {len(self.agent_accels)} < {self.num_agents}"
+            self.agent_accels = jnp.array(self.agent_accels)
 
         if "moveable" in kwargs:
             self.moveable = kwargs["moveable"]
@@ -267,14 +273,15 @@ class SimpleMPE(MultiAgentEnv):
         )
 
         # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
-        team_capabilities = jax.random.choice(key_c, self.agent_capabilities, shape=(self.num_agents,), replace=False)
+        selected_agents = jax.random.choice(key_c, self.agent_range, shape=(self.num_agents,), replace=False)
 
         # unless a test distribution is provided and this is a test_env
-        if self.test_env_flag and self.test_capabilities is not None:
-            team_capabilities = jnp.asarray(self.test_capabilities)
+        # TODO: fix test time capabilities
+        # if self.test_env_flag and self.test_capabilities is not None:
+        #     team_capabilities = jnp.asarray(self.test_capabilities)
 
-        agent_rads = team_capabilities[:, 0]
-        agent_accels = team_capabilities[:, 1]
+        agent_rads = self.agent_rads[selected_agents]
+        agent_accels = self.agent_accels[selected_agents]
 
         state = State(
             p_pos=p_pos,
@@ -283,7 +290,6 @@ class SimpleMPE(MultiAgentEnv):
             accel=agent_accels,
             rad=jnp.concatenate(
                 # NOTE: here, must define landmark rad as well, by default landmarks are 0.05
-                # TODO: potentially, complicate the env by passing landmark rad in too (see reward function to ensure this is okay)
                 [agent_rads, jnp.full((self.num_landmarks), 0.05)]
             ),
             done=jnp.full((self.num_agents), False),
