@@ -241,14 +241,15 @@ class AgentHyperRNN(nn.Module):
             cap_repr = transformed_cap[:, 0, :].reshape((time_steps, batch_size, -1))
 
         # then use capability hypernet for last layer
-        num_weights = (self.action_dim * self.hidden_dim)
-        num_biases = self.action_dim
-        cap_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights+num_biases, init_scale=self.hypernet_init_scale)(cap_repr)
-
-        # extract weights + biases from hypernet output
         time_steps, batch_size, obs_dim = obs.shape
-        weights = cap_hypernet[:, :, :num_weights].reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
-        biases = cap_hypernet[:, :, -num_biases:].reshape(time_steps, batch_size, 1, self.action_dim)
+
+        num_weights = (self.hidden_dim * self.action_dim)
+        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
+        weights = weight_hypernet(cap_repr).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
+
+        num_biases = self.action_dim
+        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
+        biases = bias_hypernet(cap_repr).reshape(time_steps, batch_size, 1, self.action_dim)
 
         # manually calculate q_vals = (embedding @ weights) + b
         # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
@@ -845,7 +846,7 @@ def main(config):
         viz_test_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'], test_env_flag=True)
         log_test_env = LogWrapper(viz_test_env)
 
-    #config["alg"]["NUM_STEPS"] = config["alg"].get("NUM_STEPS", env.max_steps) # default steps defined by the env
+    config["alg"]["NUM_STEPS"] = config["alg"].get("NUM_STEPS", train_env.max_steps) # default steps defined by the env
     
     hyper_tag = "HYPER" if config["alg"]["AGENT_HYPERAWARE"] else "RNN"
     aware_tag = "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware"
@@ -860,6 +861,9 @@ def main(config):
         "TD_LOSS" if config["alg"].get("TD_LAMBDA_LOSS", True) else "DQN_LOSS",
         f"jax_{jax.__version__}",
     ]
+
+    if 'tag' in config:
+        wandb_tags.append(config['tag'])
 
     wandb.init(
         entity=config["ENTITY"],
@@ -901,6 +905,8 @@ def main(config):
                         this_step_state = State(
                             p_pos=viz_env_states.p_pos[seed, i, env, ...],
                             p_vel=viz_env_states.p_vel[seed, i, env, ...],
+                            # TODO: toggle off for non hsn envs
+                            sensing_rads=viz_env_states.sensing_rads[seed, i, env, ...],
                             c=viz_env_states.c[seed, i, env, ...],
                             accel=viz_env_states.accel[seed, i, env, ...],
                             rad=viz_env_states.rad[seed, i, env, ...],
@@ -914,6 +920,9 @@ def main(config):
                     video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
                     visualizer.animate(video_fpath)
                     wandb.log({f"env-{env}-seed-{seed}-rollout": wandb.Video(video_fpath)})
+
+    # force multiruns to finish correctly
+    wandb.finish()
 
 if __name__ == "__main__":
     main()

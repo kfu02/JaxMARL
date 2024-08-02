@@ -1,13 +1,19 @@
 "ENV_NAME": "MPE_sensor_network"
 "ENV_KWARGS":
   "capability_aware": True # T/F
+  "max_steps": 50
 
   # capabilities implemented in MPE_sensor_network: [cover_rad]
   "num_capabilities": 1
-  "num_agents": 3
+  "num_agents": 4
 
-  # NOTE: if these lists are longer than num_agents, will sample num_agents randomly from them each train iter
-  "sensing_rads": [0.3, 1.0, 1.5] # TODO: fix sampling for sensing_rads, currently broken
-  "agent_rads": [0.15, 0.15, 0.15]
-  "agent_accels": [1, 1, 1]
-  # TODO: add test time capabilities
+  # NOTE: since these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
+  "sensing_rads": [0.3, 0.3, 0.6, 0.6, 0.3, 0.3, 0.6, 0.6]
+  "agent_rads": [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15]
+  "agent_accels": [1, 1, 1, 1, 1, 1, 1, 1]
+
+  "test_team":
+    "sensing_rads": [1.0, 1.0, 1.0, 1.0]
+    "agent_rads": [0.15, 0.15, 0.15, 0.15]
+    "agent_accels": [1, 1, 1, 1]
+

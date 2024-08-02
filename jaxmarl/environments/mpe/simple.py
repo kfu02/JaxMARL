@@ -24,6 +24,8 @@ class State:
 
     p_pos: chex.Array  # [num_entities, [x, y]]
     p_vel: chex.Array  # [n, [x, y]]
+    # TODO: rename this to capabilities
+    sensing_rads: chex.Array # [n, 1] repr sensing rads used in SensorNetworkMPE
     c: chex.Array  # communication state [num_agents, [dim_c]]
     accel: chex.Array # [n, 1] representing accel applied to actions
     rad: chex.Array # [n, 1] representing rad of each entity (first agents, then landmarks)
@@ -45,7 +47,6 @@ class SimpleMPE(MultiAgentEnv):
         colour=None,
         dim_c=0,
         dim_p=2,
-        max_steps=MAX_STEPS,
         dt=DT,
         **kwargs,
     ):
@@ -119,7 +120,11 @@ class SimpleMPE(MultiAgentEnv):
         self.dim_p = dim_p  # position dimensionality
 
         # Environment parameters
-        self.max_steps = max_steps
+        if "max_steps" not in kwargs:
+            self.max_steps = MAX_STEPS # 25 by default
+        else:
+            self.max_steps = kwargs["max_steps"]
+
         self.dt = dt
 
         if "agent_rads" in kwargs:
@@ -244,7 +249,9 @@ class SimpleMPE(MultiAgentEnv):
             step=state.step + 1,
         )
 
-        reward = self.rewards(state)
+        # TODO: this breaks all other envs but is needed for sensor_network...
+        key, key_r = jax.random.split(key)
+        reward = self.rewards(state, key_r)
 
         obs = self.get_obs(state)
 

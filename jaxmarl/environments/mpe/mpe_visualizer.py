@@ -63,10 +63,10 @@ class MPEVisualizer(object):
             self.ax.add_patch(c)
             self.entity_artists.append(c)
 
-            # draw the outline for the sensing radius, if it exists (SimpleSpread)
-            if self.env.sensing_rads is not None:
+            # draw the outline for the sensing radius, if it exists (SensorNetworkMPE)
+            if state.sensing_rads is not None:
                 sensing_rad = Circle(
-                    state.p_pos[i], self.env.sensing_rads[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
+                    state.p_pos[i], state.sensing_rads[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
                 )
                 self.ax.add_patch(sensing_rad)
                 self.sensing_rad_artists.append(sensing_rad)
