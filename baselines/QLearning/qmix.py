@@ -75,6 +75,100 @@ class ScannedRNN(nn.Module):
         )
 
     
+class AgentMLP(nn.Module):
+    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
+    action_dim: int
+    hidden_dim: int
+    init_scale: float
+
+    @nn.compact
+    def __call__(self, hidden, x, train=False):
+        obs, dones = x
+
+        # NOTE: SimpleSpread gives obs as obs+cap (concatenated) and zeroes out
+        # the capabilities if capability_aware=False in config. Thus, no change
+        # is needed here for capability aware/unaware.
+        embedding = nn.relu(nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs))
+        embedding = nn.relu(nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding))
+        q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
+
+        # hidden, q_vals is the original return for AgentRNN
+        # this is just to keep the training loop code consistent
+        return hidden, q_vals 
+
+class AgentHyperMLP(nn.Module):
+    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
+    action_dim: int
+    hidden_dim: int
+    init_scale: float
+    num_agents: int
+    num_capabilities: int
+    hypernet_hidden_dim: int
+    embedding_dim: int
+    hypernet_init_scale: float
+
+    @nn.compact
+    def __call__(self, hidden, x, train=False):
+        obs, dones = x
+
+        # separate obs into capabilities and observations
+        # (env gives obs = orig obs+cap)
+        # NOTE: this is hardcoded to match simple_spread's computation
+        dim_capabilities = self.num_agents * self.num_capabilities
+        cap = obs[:, :, -dim_capabilities:]
+        obs = obs[:, :, :-dim_capabilities]
+
+        cap_repr = cap
+        time_steps, batch_size, obs_dim = obs.shape
+
+        # hypernetwork
+        # TODO: find the memory efficient version from the original paper
+        w_1 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
+        b_1 = nn.Dense(self.action_dim, kernel_init=orthogonal(self.hypernet_init_scale), bias_init=constant(0.))(cap_repr)
+        # w_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
+        # b_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
+        
+        # reshaping
+        w_1 = w_1.reshape(time_steps, batch_size, self.embedding_dim, self.action_dim)
+        b_1 = b_1.reshape(time_steps, batch_size, 1, self.action_dim)
+        # w_2 = w_2.reshape(time_steps, batch_size, self.embedding_dim, self.action_dim)
+        # b_2 = b_2.reshape(time_steps, batch_size, 1, self.action_dim)
+    
+        # apply as target network
+        embedding = nn.Dense(self.embedding_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
+        q_vals = jnp.matmul(embedding[:, :, None, :], w_1) + b_1
+        # embedding = nn.relu(jnp.matmul(obs[:, :, None, :], w_1) + b_1)
+        # q_vals = jnp.matmul(embedding, w_2) + b_2
+        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
+
+        # num_weights = (dim_capabilities * self.hidden_dim)
+        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
+        # w_1 = weight_hypernet(cap_repr).reshape(time_steps, batch_size, dim_capabilities, self.hidden_dim)
+        #
+        # num_biases = self.hidden_dim
+        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
+        # b_1 = bias_hypernet(cap_repr).reshape(time_steps, batch_size, 1, self.hidden_dim)
+        #
+        # num_weights = (self.hidden_dim * self.hidden_dim)
+        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
+        # w_2 = weight_hypernet(cap_repr).reshape(time_steps, batch_size, self.hidden_dim, self.hidden_dim)
+        #
+        # num_biases = self.hidden_dim
+        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
+        # b_2 = bias_hypernet(cap_repr).reshape(time_steps, batch_size, 1, self.hidden_dim)
+        #
+        # embedding = (cap_repr[:, :, None, :] @ w_1) + b_1
+        # embedding = nn.relu(embedding)
+        # embedding = (embedding @ w_2) + b_2
+        # embedding = nn.relu(embedding)
+
+        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
+
+        # hidden, q_vals is the original return for AgentRNN
+        # this is just to keep the training loop code consistent
+        return hidden, q_vals 
+
+
 class AgentRNN(nn.Module):
     # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
     action_dim: int
@@ -392,10 +486,17 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
 
         # INIT NETWORK
         # init agent
-        if not config["AGENT_HYPERAWARE"]:
-            agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
-        else:
-            agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+        if not config["AGENT_RECURRENT"]:
+            if not config["AGENT_HYPERAWARE"]:
+                agent = AgentMLP(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
+            else:
+                agent = AgentHyperMLP(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_hidden_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], embedding_dim=config["AGENT_HYPERNET_EMBEDDING_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents)
+        else: 
+            if not config["AGENT_HYPERAWARE"]:
+                agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
+            else:
+                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+
         rng, _rng = jax.random.split(rng)
 
         if config["PARAMETERS_SHARING"]:
@@ -848,7 +949,8 @@ def main(config):
 
     config["alg"]["NUM_STEPS"] = config["alg"].get("NUM_STEPS", train_env.max_steps) # default steps defined by the env
     
-    hyper_tag = "HYPER" if config["alg"]["AGENT_HYPERAWARE"] else "RNN"
+    hyper_tag = "hyper" if config["alg"]["AGENT_HYPERAWARE"] else "normal"
+    recurrent_tag = "RNN" if config["alg"]["AGENT_RECURRENT"] else "MLP"
     aware_tag = "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware"
     cap_transf_tag = "transformer" if config["alg"]["AGENT_USE_CAPABILITY_TRANSFORMER"] else "no-transformer"
 
@@ -856,6 +958,7 @@ def main(config):
         alg_name.upper(),
         env_name,
         hyper_tag,
+        recurrent_tag,
         aware_tag,
         cap_transf_tag,
         "TD_LOSS" if config["alg"].get("TD_LAMBDA_LOSS", True) else "DQN_LOSS",
@@ -869,7 +972,7 @@ def main(config):
         entity=config["ENTITY"],
         project=config["PROJECT"],
         tags=wandb_tags,
-        name=f'{hyper_tag} {aware_tag} {cap_transf_tag} / {env_name}',
+        name=f'{hyper_tag} {recurrent_tag} {aware_tag} {cap_transf_tag} / {env_name}',
         config=config,
         mode=config["WANDB_MODE"],
     )

@@ -7,10 +7,12 @@
 
 # agent network params
 "PARAMETERS_SHARING": True
-"AGENT_HIDDEN_DIM": 64 # width of the RNN hidden dim + surrounding MLP layers
+"AGENT_HIDDEN_DIM": 32 # width of the RNN hidden dim + surrounding MLP layers
+"AGENT_RECURRENT": False
 "AGENT_INIT_SCALE": 2.
-"AGENT_HYPERAWARE": False
-"AGENT_HYPERNET_DIM": 64 # only applies if AGENT_HYPERAWARE=True
+"AGENT_HYPERAWARE": True
+"AGENT_HYPERNET_HIDDEN_DIM": 64 # only applies if AGENT_HYPERAWARE=True
+"AGENT_HYPERNET_EMBEDDING_DIM": 32 # only applies if AGENT_HYPERAWARE=True
 "AGENT_HYPERNET_INIT_SCALE": 0.2 # NOTE: MUST TUNE THIS
 
 "AGENT_USE_CAPABILITY_TRANSFORMER": False
