@@ -495,7 +495,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             if not config["AGENT_HYPERAWARE"]:
                 agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
             else:
-                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
 
         rng, _rng = jax.random.split(rng)
 
@@ -1008,8 +1008,7 @@ def main(config):
                         this_step_state = State(
                             p_pos=viz_env_states.p_pos[seed, i, env, ...],
                             p_vel=viz_env_states.p_vel[seed, i, env, ...],
-                            # TODO: toggle off for non hsn envs
-                            sensing_rads=viz_env_states.sensing_rads[seed, i, env, ...],
+                            sensing_rads=None, # viz_env_states.sensing_rads[seed, i, env, ...],
                             c=viz_env_states.c[seed, i, env, ...],
                             accel=viz_env_states.accel[seed, i, env, ...],
                             rad=viz_env_states.rad[seed, i, env, ...],

@@ -56,7 +56,7 @@ class MPEVisualizer(object):
         
         self.entity_artists = []
         self.sensing_rad_artists = []
-        for i in range(self.env.num_entities):
+        for i in range(self.env.num_agents):
             c = Circle(
                 state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
             )
@@ -70,6 +70,14 @@ class MPEVisualizer(object):
                 )
                 self.ax.add_patch(sensing_rad)
                 self.sensing_rad_artists.append(sensing_rad)
+
+        for j in range(self.env.num_landmarks):
+            i = j + self.env.num_agents
+            c = Circle(
+                state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
+            )
+            self.ax.add_patch(c)
+            self.entity_artists.append(c)
             
         self.step_counter = self.ax.text(-1.95, 1.95, f"Step: {state.step}", va="top")
         
