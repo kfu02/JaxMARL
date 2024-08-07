@@ -9,10 +9,10 @@
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
   # NOTE: hijacking agent_rads = firefighting capability
-  "agent_rads": [0.3, 0.1, 0.1]
-  "agent_accels": [1, 3, 3]
+  "agent_rads": [0.3, 0.2, 0.1, 0.1]
+  "agent_accels": [1, 2, 3, 3]
 
-  # "test_team":
-  #   "agent_rads": [0.15, 0.15, 0.15, 0.15]
-  #   "agent_accels": [1, 1, 1, 1]
+  "test_team":
+    "agent_rads": [0.4, 0.08, 0.08]
+    "agent_accels": [1, 3, 3]
 

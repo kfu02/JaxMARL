@@ -115,7 +115,7 @@ class AgentHyperMLP(nn.Module):
         # (env gives obs = orig obs+cap)
         # NOTE: this is hardcoded to match simple_spread's computation
         dim_capabilities = self.num_agents * self.num_capabilities
-        cap = obs[:, :, -dim_capabilities:]
+        cap = obs[:, :, -dim_capabilities:] # last dim_cap elements in obs are cap
         obs = obs[:, :, :-dim_capabilities]
 
         cap_repr = cap
@@ -299,6 +299,7 @@ class AgentHyperRNN(nn.Module):
         dim_capabilities = self.num_agents * self.num_capabilities
         cap = obs[:, :, -dim_capabilities:]
         obs = obs[:, :, :-dim_capabilities]
+        # jax.debug.print("cap {} obs {}", cap, obs)
 
         # only feed obs through RNN encoder
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)

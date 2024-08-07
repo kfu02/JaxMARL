@@ -25,7 +25,7 @@ class SensorNetworkMPE(SimpleMPE):
         self.num_capabilities = num_capabilities
 
         observation_spaces = {
-            i:Box(-jnp.inf, jnp.inf, (num_agents*(2+2+num_capabilities) + 2*num_landmarks,)) 
+            i:Box(-jnp.inf, jnp.inf, (num_agents*(2+2+num_capabilities) + num_landmarks*(2+1),)) 
             for i in agents
         }
 
@@ -33,9 +33,6 @@ class SensorNetworkMPE(SimpleMPE):
 
         # Env specific parameters
         self.test_team = kwargs["test_team"] if "test_team" in kwargs else None
-        # self.agent_spawns = jnp.array([[-1.0, 0.0], [0.0, 0.0], [1.0, 0.0]])
-        self.agent_spawns = jnp.array([[0.6, 0.0], [0.0, 0.0], [-0.6, 0.0]])
-        self.landmark_spawns = jnp.array([[0.0, -0.5], [0.0, 0.5]])
         # Parameters
         # NOTE: rad now passed in, necessity for SimpleSpread modifications
         collide = jnp.concatenate(
@@ -85,8 +82,9 @@ class SensorNetworkMPE(SimpleMPE):
                 other_cap = jnp.full(other_cap.shape, -1e3)
                 ego_cap = jnp.full(ego_cap.shape, -1e3)
 
-            # give agents the pos of all landmarks
-            fire_obs = self.landmark_spawns
+            # give agents the pos and rad of all landmarks (fires)
+            landmark_p_pos = state.p_pos[self.num_agents:]
+            landmark_rads = state.rad[self.num_agents:]
 
             obs = jnp.concatenate([
                 # ego agent attributes, then, teammate attr
@@ -95,9 +93,11 @@ class SensorNetworkMPE(SimpleMPE):
                 other_pos.flatten(),  # N-1, 2
                 ego_vel.flatten(),  # 2
                 other_vel.flatten(),  # N-1, 2
+                landmark_p_pos.flatten(), # 2, 2
+                landmark_rads.flatten(), # 1, 2
+                # NOTE: caps must go last for hypernet logic
                 ego_cap.flatten(),  # n_cap
                 other_cap.flatten(),  # N-1, n_cap
-                fire_obs.flatten(), # 2, 2
             ])
             # jax.debug.print("pos {} , vel {}, cap {}, obs {}", state.p_pos.flatten(), state.p_vel.flatten(), state.sensing_rads.flatten(), obs)
 
@@ -122,7 +122,8 @@ class SensorNetworkMPE(SimpleMPE):
 
         agent_rads = state.rad[:self.num_agents]
         landmark_rads = state.rad[self.num_agents:]
-        for i, landmark_pos in enumerate(self.landmark_spawns):
+        landmark_p_pos = state.p_pos[self.num_agents:]
+        for i, landmark_pos in enumerate(landmark_p_pos):
             landmark_rad = landmark_rads[i]
 
             # TODO could vectorize the outer loop as well
@@ -136,7 +137,7 @@ class SensorNetworkMPE(SimpleMPE):
 
         # reward each agent for getting closer to one of the two landmarks
         def _dist_to_landmarks(agent_pos):
-            dist_to_landmarks = jnp.linalg.norm(agent_pos - self.landmark_spawns, axis=1)
+            dist_to_landmarks = jnp.linalg.norm(agent_pos - landmark_p_pos, axis=1)
             return dist_to_landmarks
 
         def _agent_rew(agent_i):
@@ -155,12 +156,16 @@ class SensorNetworkMPE(SimpleMPE):
         """overriding superclass to reset capabilities"""
         # NOTE: copy-pasted from simple.py, bad practice
 
-        key_a, key_l, key_c = jax.random.split(key, num=3)
+        key_a, key_l, key_c, key_fr = jax.random.split(key, num=4)
 
         p_pos = jnp.concatenate(
             [
-                self.agent_spawns,
-                self.landmark_spawns,
+                jax.random.uniform(
+                    key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
+                ),
+                jax.random.uniform(
+                    key_l, (self.num_landmarks, 2), minval=-1.0, maxval=+1.0
+                ),
             ]
         )
 
@@ -175,6 +180,9 @@ class SensorNetworkMPE(SimpleMPE):
             agent_rads = jnp.array(self.test_team["agent_rads"])
             agent_accels = jnp.array(self.test_team["agent_accels"])
 
+        # TODO: sample fire radii based on the team comp?
+        landmark_rads = jax.random.uniform(key_fr, (self.num_landmarks,), minval=0.10, maxval=0.40)
+
         state = State(
             p_pos=p_pos,
             p_vel=jnp.zeros((self.num_entities, self.dim_p)),
@@ -183,7 +191,7 @@ class SensorNetworkMPE(SimpleMPE):
             accel=agent_accels,
             rad=jnp.concatenate(
                 # NOTE: here, must define landmark rad as well, by default landmarks are 0.05
-                [agent_rads, jnp.array([0.19, 0.29])]
+                [agent_rads, landmark_rads]
             ),
             done=jnp.full((self.num_agents), False),
             step=0,
