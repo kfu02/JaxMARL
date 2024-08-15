@@ -291,14 +291,14 @@ class AgentHyperRNN(nn.Module):
 
     @nn.compact
     def __call__(self, hidden, x, train=True):
-        obs, dones = x
+        orig_obs, dones = x
 
         # separate obs into capabilities and observations
         # (env gives obs = orig obs+cap)
         # NOTE: this is hardcoded to match simple_spread's computation
         dim_capabilities = self.num_agents * self.num_capabilities
-        cap = obs[:, :, -dim_capabilities:]
-        obs = obs[:, :, :-dim_capabilities]
+        cap = orig_obs[:, :, -dim_capabilities:]
+        obs = orig_obs[:, :, :-dim_capabilities]
         # jax.debug.print("cap {} obs {}", cap, obs)
 
         # only feed obs through RNN encoder
@@ -309,6 +309,8 @@ class AgentHyperRNN(nn.Module):
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
 
         # transform capabilities via transformer before passing to cap_hypernet (if flag given)
+        # TODO: fix transformer?
+        """
         cap_repr = cap
         if self.use_capability_transformer:
             # break apart the capabilities by agent, so that attention is applied across agents
@@ -334,17 +336,18 @@ class AgentHyperRNN(nn.Module):
 
             # only take the transformed version of the ego-agent's capabilities
             cap_repr = transformed_cap[:, 0, :].reshape((time_steps, batch_size, -1))
+        """
 
         # then use capability hypernet for last layer
         time_steps, batch_size, obs_dim = obs.shape
 
         num_weights = (self.hidden_dim * self.action_dim)
         weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        weights = weight_hypernet(cap_repr).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
+        weights = weight_hypernet(cap).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
 
         num_biases = self.action_dim
         bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
-        biases = bias_hypernet(cap_repr).reshape(time_steps, batch_size, 1, self.action_dim)
+        biases = bias_hypernet(cap).reshape(time_steps, batch_size, 1, self.action_dim)
 
         # manually calculate q_vals = (embedding @ weights) + b
         # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
