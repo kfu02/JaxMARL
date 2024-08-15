@@ -8,7 +8,7 @@ from jaxmarl.environments.mpe.default_params import *
 from gymnax.environments.spaces import Box
 
 
-class SensorNetworkMPE(SimpleMPE):
+class SimpleFireMPE(SimpleMPE):
     def __init__(
         self,
         num_agents=3,

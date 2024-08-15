@@ -3,7 +3,7 @@ from .environments import (
     SimpleTagMPE,
     SimpleWorldCommMPE,
     SimpleSpreadMPE,
-    SensorNetworkMPE,
+    SimpleFireMPE,
     SimpleCryptoMPE,
     SimpleSpeakerListenerMPE,
     SimpleFacmacMPE,
@@ -46,8 +46,8 @@ def make(env_id: str, **env_kwargs):
         env = SimpleWorldCommMPE(**env_kwargs)
     elif env_id == "MPE_simple_spread_v3":
         env = SimpleSpreadMPE(**env_kwargs)
-    elif env_id == "MPE_sensor_network":
-        env = SensorNetworkMPE(**env_kwargs)
+    elif env_id == "MPE_simple_fire":
+        env = SimpleFireMPE(**env_kwargs)
     elif env_id == "MPE_simple_crypto_v3":
         env = SimpleCryptoMPE(**env_kwargs)
     elif env_id == "MPE_simple_speaker_listener_v4":
@@ -121,7 +121,7 @@ registered_envs = [
     "MPE_simple_tag_v3",
     "MPE_simple_world_comm_v3",
     "MPE_simple_spread_v3",
-    "MPE_sensor_network",
+    "MPE_simple_fire",
     "MPE_simple_crypto_v3",
     "MPE_simple_speaker_listener_v4",
     "MPE_simple_push_v3",

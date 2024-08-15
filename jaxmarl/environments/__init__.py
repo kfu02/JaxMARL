@@ -4,7 +4,7 @@ from .mpe import (
     SimpleTagMPE,
     SimpleWorldCommMPE,
     SimpleSpreadMPE,
-    SensorNetworkMPE,
+    SimpleFireMPE,
     SimpleCryptoMPE,
     SimpleSpeakerListenerMPE,
     SimplePushMPE,

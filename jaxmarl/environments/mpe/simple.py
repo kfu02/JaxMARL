@@ -25,7 +25,7 @@ class State:
     p_pos: chex.Array  # [num_entities, [x, y]]
     p_vel: chex.Array  # [n, [x, y]]
     # TODO: rename this to capabilities
-    sensing_rads: chex.Array # [n, 1] repr sensing rads used in SensorNetworkMPE
+    sensing_rads: chex.Array # [n, 1] repr sensing rads used in SimpleFire
     c: chex.Array  # communication state [num_agents, [dim_c]]
     accel: chex.Array # [n, 1] representing accel applied to actions
     rad: chex.Array # [n, 1] representing rad of each entity (first agents, then landmarks)
@@ -249,7 +249,7 @@ class SimpleMPE(MultiAgentEnv):
             step=state.step + 1,
         )
 
-        # TODO: this breaks all other envs but is needed for sensor_network...
+        # TODO: this breaks all other envs but is needed for simple_fire...
         key, key_r = jax.random.split(key)
         reward = self.rewards(state, key_r)
 

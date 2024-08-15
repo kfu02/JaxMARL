@@ -1,9 +1,9 @@
-"ENV_NAME": "MPE_sensor_network"
+"ENV_NAME": "MPE_simple_fire"
 "ENV_KWARGS":
   "capability_aware": True # T/F
   "max_steps": 25
 
-  # capabilities implemented in MPE_sensor_network: [cover_rad]
+  # capabilities implemented in MPE_simple_fire: [fire fight power, accel]
   "num_capabilities": 2
   "num_agents": 3
 
