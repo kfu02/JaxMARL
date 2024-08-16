@@ -13,4 +13,4 @@
 "VISUALIZE_FINAL_POLICY": True
 # number of seeds/envs to visualize
 "VIZ_NUM_ENVS": 3
-"VIZ_NUM_SEEDS": 2
+"VIZ_NUM_SEEDS": 5

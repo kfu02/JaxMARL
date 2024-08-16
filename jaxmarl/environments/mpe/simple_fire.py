@@ -129,11 +129,18 @@ class SimpleFireMPE(SimpleMPE):
             # TODO could vectorize the outer loop as well
             # take the sum of all agents ff on this landmark
             agents_on_landmark = jax.vmap(_agent_in_range, in_axes=[0, None, None])(self.agent_range, landmark_pos, landmark_rad)
-            firefighting_level = jnp.where(agents_on_landmark, agent_rads, 0)
+            firefighting_level = jnp.sum(jnp.where(agents_on_landmark, agent_rads, 0))
 
             # if ff is enough, reward the team, otherwise penalize it
-            enough_firefight = jnp.sum(firefighting_level) >= landmark_rads[i]
-            global_rew = jnp.where(enough_firefight, global_rew + 1, global_rew - 1)
+            # enough_firefight = firefighting_level >= landmark_rads[i]
+            # global_rew = jnp.where(enough_firefight, global_rew + 1, global_rew - 1)
+
+            # dense rew for firefighting
+            enough_firefight = firefighting_level >= landmark_rads[i]
+            # NOTE: give +1 if enough firefighting, else reward based on how
+            # much of fire is covered (fire rad range 0.1-0.4)
+            ff_rew = jnp.where(enough_firefight, 1, 2*(firefighting_level-landmark_rads[i]))
+            global_rew += ff_rew
 
         # reward each agent for getting closer to one of the two landmarks
         def _dist_to_landmarks(agent_pos):
@@ -153,19 +160,62 @@ class SimpleFireMPE(SimpleMPE):
 
     @partial(jax.jit, static_argnums=[0])
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, State]:
-        """overriding superclass to reset capabilities"""
+        """Overriding superclass simple.py"""
         # NOTE: copy-pasted from simple.py, bad practice
 
         key_a, key_l, key_c, key_fr = jax.random.split(key, num=4)
 
+        # spawn landmarks (fires) s.t. they don't overlap
+        landmark_rads = jax.random.uniform(key_fr, (self.num_landmarks,), minval=0.10, maxval=0.40)
+
+        def _spawn_one_fire(carry, _):
+            key_l, existing_fires, fire_index = carry
+
+            # spawn a new random fire
+            key_l, key_fs = jax.random.split(key_l)
+            new_fire = jax.random.uniform(
+                key_fs, (1, 2), minval=-1.0, maxval=+1.0
+            )
+
+            # it's valid if it doesn't intersect with any existing fires (that fire's rad + new fire rad)
+            dists = jnp.linalg.norm(existing_fires - new_fire, axis=1)
+            new_fire_valid = jnp.all(dists > (landmark_rads + landmark_rads[fire_index]))
+
+            new_fire = jnp.reshape(new_fire, (2,))
+            new_fire_added = existing_fires.at[fire_index, :].set(new_fire)
+
+            # if new fire spawn is valid, add it to the fire list, and incr the fire index
+            new_fires = jax.lax.cond(
+                new_fire_valid, 
+                lambda: new_fire_added, # T
+                lambda: existing_fires, # F
+            )
+            fire_index = jax.lax.cond(
+                new_fire_valid,
+                lambda: fire_index+1,
+                lambda: fire_index,
+            )
+            return (key_l, new_fires, fire_index), None
+
+        # use jax.lax.scan to spawn N more fires, each of which does not collide with any prev
+        key_l, key_fs = jax.random.split(key_l)
+        # set the init spawns to be far from the actual spawns, s.t. array shape can be maintained in the carry
+        init_fires = jax.random.uniform(
+            key_fs, (self.num_landmarks, 2), minval=-100.0, maxval=-100.0
+        )
+        initial_state = (key_l, init_fires, 0)
+        MAX_ITERS = 10*self.num_landmarks # try ~10 times for each fire, each time
+        (key_l, landmark_p_pos, _), _ = jax.lax.scan(_spawn_one_fire, initial_state, None, length=MAX_ITERS)
+
         p_pos = jnp.concatenate(
             [
-                jax.random.uniform(
-                    key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
-                ),
-                jax.random.uniform(
-                    key_l, (self.num_landmarks, 2), minval=-1.0, maxval=+1.0
-                ),
+                # spawn agents in the same spot (center), like a real fire depot
+                jnp.zeros((self.num_agents, 2)),
+                # OLD: spawn randomly, in same range as fires
+                # jax.random.uniform(
+                #     key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
+                # ),
+                landmark_p_pos,
             ]
         )
 
@@ -179,9 +229,6 @@ class SimpleFireMPE(SimpleMPE):
         if self.test_env_flag and self.test_team is not None:
             agent_rads = jnp.array(self.test_team["agent_rads"])
             agent_accels = jnp.array(self.test_team["agent_accels"])
-
-        # TODO: sample fire radii based on the team comp?
-        landmark_rads = jax.random.uniform(key_fr, (self.num_landmarks,), minval=0.10, maxval=0.40)
 
         state = State(
             p_pos=p_pos,
