@@ -57,13 +57,19 @@ class MPEVisualizer(object):
         self.entity_artists = []
         self.sensing_rad_artists = []
         for i in range(self.env.num_agents):
+            # c = Circle(
+            #     state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
+            # )
+            # draw agents as empty circles so they can be seen if they overlap
             c = Circle(
-                state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
+                state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
             )
+
             self.ax.add_patch(c)
             self.entity_artists.append(c)
 
             # draw the outline for the sensing radius, if it exists (SimpleFireMPE)
+            # TODO: rename sensing_radius to fire_radius
             if state.sensing_rads is not None:
                 sensing_rad = Circle(
                     state.p_pos[i], state.sensing_rads[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
