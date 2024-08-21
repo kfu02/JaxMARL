@@ -1012,7 +1012,6 @@ def main(config):
                         this_step_state = State(
                             p_pos=viz_env_states.p_pos[seed, i, env, ...],
                             p_vel=viz_env_states.p_vel[seed, i, env, ...],
-                            sensing_rads=None, # viz_env_states.sensing_rads[seed, i, env, ...],
                             c=viz_env_states.c[seed, i, env, ...],
                             accel=viz_env_states.accel[seed, i, env, ...],
                             rad=viz_env_states.rad[seed, i, env, ...],

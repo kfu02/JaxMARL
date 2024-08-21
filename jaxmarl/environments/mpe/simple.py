@@ -24,8 +24,6 @@ class State:
 
     p_pos: chex.Array  # [num_entities, [x, y]]
     p_vel: chex.Array  # [n, [x, y]]
-    # TODO: rename this to capabilities
-    sensing_rads: chex.Array # [n, 1] repr sensing rads used in SimpleFire
     c: chex.Array  # communication state [num_agents, [dim_c]]
     accel: chex.Array # [n, 1] representing accel applied to actions
     rad: chex.Array # [n, 1] representing rad of each entity (first agents, then landmarks)

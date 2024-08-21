@@ -55,7 +55,6 @@ class MPEVisualizer(object):
         self.ax.set_ylim([-ax_lim, ax_lim])
         
         self.entity_artists = []
-        self.sensing_rad_artists = []
         for i in range(self.env.num_agents):
             # c = Circle(
             #     state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
@@ -67,15 +66,6 @@ class MPEVisualizer(object):
 
             self.ax.add_patch(c)
             self.entity_artists.append(c)
-
-            # draw the outline for the sensing radius, if it exists (SimpleFireMPE)
-            # TODO: rename sensing_radius to fire_radius
-            if state.sensing_rads is not None:
-                sensing_rad = Circle(
-                    state.p_pos[i], state.sensing_rads[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
-                )
-                self.ax.add_patch(sensing_rad)
-                self.sensing_rad_artists.append(sensing_rad)
 
         for j in range(self.env.num_landmarks):
             i = j + self.env.num_agents
@@ -104,9 +94,6 @@ class MPEVisualizer(object):
         state = self.state_seq[frame]
         for i, c in enumerate(self.entity_artists):
             c.center = state.p_pos[i]
-            # also update the sensing radius, if necessary
-            if self.sensing_rad_artists:
-                self.sensing_rad_artists[i].center = state.p_pos[i]
             
         self.step_counter.set_text(f"Step: {state.step}")
         

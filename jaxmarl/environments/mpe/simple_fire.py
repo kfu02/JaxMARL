@@ -99,7 +99,6 @@ class SimpleFireMPE(SimpleMPE):
                 ego_cap.flatten(),  # n_cap
                 other_cap.flatten(),  # N-1, n_cap
             ])
-            # jax.debug.print("pos {} , vel {}, cap {}, obs {}", state.p_pos.flatten(), state.p_vel.flatten(), state.sensing_rads.flatten(), obs)
 
             return obs
 
@@ -140,9 +139,15 @@ class SimpleFireMPE(SimpleMPE):
             # NOTE: give +1 if enough firefighting, else reward based on how
             # much of fire is covered (fire rad range 0.1-0.4)
             ff_rew = jnp.where(enough_firefight, 1, 2*(firefighting_level-landmark_rads[i]))
-            global_rew += ff_rew
 
-        # reward each agent for getting closer to one of the two landmarks
+            # only add reward if this fire is valid (rad > 0)
+            global_rew = jnp.where(landmark_rad > 0, global_rew+ff_rew, global_rew)
+
+        # normalize global rew based on how many active fires there are
+        active_fires = jnp.count_nonzero(landmark_rads > 0)
+        global_rew /= active_fires
+
+        # reward each agent for getting closer to one of the landmarks
         def _dist_to_landmarks(agent_pos):
             dist_to_landmarks = jnp.linalg.norm(agent_pos - landmark_p_pos, axis=1)
             return dist_to_landmarks
@@ -153,7 +158,7 @@ class SimpleFireMPE(SimpleMPE):
             return -jnp.min(dists)
 
         rew = {
-            a: global_rew + _agent_rew(i)
+            a: global_rew + (0.01 * _agent_rew(i))
             for i, a in enumerate(self.agents)
         }
         return rew
@@ -207,6 +212,25 @@ class SimpleFireMPE(SimpleMPE):
         MAX_ITERS = 10*self.num_landmarks # try ~10 times for each fire, each time
         (key_l, landmark_p_pos, _), _ = jax.lax.scan(_spawn_one_fire, initial_state, None, length=MAX_ITERS)
 
+        """
+        # randomly decide to spawn between 1 and NUM_LANDMARKS fires (NUM_LANDMARKS = MAX_FIRES)
+        # then mask out landmark_rads/landmark_p_pos as needed
+        key_l, key_num_fires = jax.random.split(key_l)
+        num_fires = jax.random.randint(key_num_fires, (), 1, self.num_landmarks+1)
+
+        # this mask dictates which fires to be masked out
+        # and works by index-wise comparing indices array with RNG num_fires from above
+        # e.g. indices=[0, 1, 2], num_fires=2 -> mask=[T, T, F]
+        # num_to_mask = (self.num_landmarks - num_fires)
+        num_to_mask = 0
+        mask = jnp.arange(self.num_landmarks) < num_to_mask
+        landmark_rads = jnp.where(mask, -10, landmark_rads)
+
+        # expand mask to correctly match p_pos shape
+        mask = jnp.stack([mask, mask], axis=1)
+        landmark_p_pos = jnp.where(mask, -10, landmark_p_pos)
+        """
+
         p_pos = jnp.concatenate(
             [
                 # spawn agents in the same spot (center), like a real fire depot
@@ -233,7 +257,6 @@ class SimpleFireMPE(SimpleMPE):
         state = State(
             p_pos=p_pos,
             p_vel=jnp.zeros((self.num_entities, self.dim_p)),
-            sensing_rads=None,
             c=jnp.zeros((self.num_agents, self.dim_c)),
             accel=agent_accels,
             rad=jnp.concatenate(
