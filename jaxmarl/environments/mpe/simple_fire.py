@@ -86,18 +86,33 @@ class SimpleFireMPE(SimpleMPE):
             landmark_p_pos = state.p_pos[self.num_agents:]
             landmark_rads = state.rad[self.num_agents:]
 
-            obs = jnp.concatenate([
-                # ego agent attributes, then, teammate attr
-                # for each of pos/vel/cap, in same order, in matching order
+            ego_agent_obs = jnp.concatenate([
                 ego_pos.flatten(),  # 2
-                other_pos.flatten(),  # N-1, 2
                 ego_vel.flatten(),  # 2
-                other_vel.flatten(),  # N-1, 2
+                ego_cap.flatten(),  # n_cap
+            ])
+
+            # get one other agent, for vmap
+            def _get_other_agent_obs(other_i):
+                other_agent_pos = other_pos[other_i, :]
+                other_agent_vel = other_vel[other_i, :]
+                other_agent_cap = other_cap[other_i, :]
+                return jnp.concatenate([
+                    other_agent_pos.flatten(), 
+                    other_agent_vel.flatten(), 
+                    other_agent_cap.flatten(),
+                ])
+
+            # arr [N-1, 2+2+n_cap]
+            other_agent_obs = jax.vmap(_get_other_agent_obs)(jnp.arange(self.num_agents-1))
+            # jax.debug.print("other agent obs {}", other_agent_obs)
+
+            obs = jnp.concatenate([
+                # ego agent + other agents + global info
+                ego_agent_obs.flatten(),
+                other_agent_obs.flatten(),
                 landmark_p_pos.flatten(), # 2, 2
                 landmark_rads.flatten(), # 1, 2
-                # NOTE: caps must go last for hypernet logic
-                ego_cap.flatten(),  # n_cap
-                other_cap.flatten(),  # N-1, n_cap
             ])
 
             return obs
