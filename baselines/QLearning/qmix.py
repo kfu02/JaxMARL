@@ -314,38 +314,23 @@ class AgentHyperRNN(nn.Module):
         # separate all agent_obs into individual agent obs
         agent_specific_obs = agent_specific_obs.reshape(time_steps, batch_size, self.num_agents, -1)
         agent_specific_cap = agent_specific_obs[:, :, :, self.num_capabilities:]
-        agent_specific_obs = agent_specific_obs[:, :, :, :self.num_capabilities]
+        # agent_specific_obs = agent_specific_obs[:, :, :, :self.num_capabilities]
 
-        # run each through the same shared-param hyper embedder
-        hyper_in = agent_specific_obs.shape[-1]
-        hyper_out = self.hidden_dim // 4
-        num_weights = hyper_in * hyper_out
-        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=hyper_out, init_scale=0)
-
-        agent_embeddings = []
-        for i in range(self.num_agents):
-            agent_obs = agent_specific_obs[:, :, i, :]
-            agent_cap = agent_specific_cap[:, :, i, :]
-
-            weights = weight_hypernet(agent_cap).reshape(time_steps, batch_size, hyper_in, hyper_out)
-            biases = bias_hypernet(agent_cap).reshape(time_steps, batch_size, 1, hyper_out)
-
-            # manually calculate y = (obs @ weights) + b for each agent
-            agent_embed = jnp.matmul(agent_obs[:, :, None, :], weights)+biases
-            agent_embed = agent_embed.squeeze(axis=2)
-            agent_embeddings.append(agent_embed)
+        # run each through the same shared-param embedder
 
         # NOTE: this is not size-invariant right now
-        pooled_agent_embedding = jnp.concatenate(agent_embeddings, axis=-1)
+        agent_embedder = Embedder(hidden_dim=self.hidden_dim//2, init_scale=self.init_scale)
+        # pooled_agent_embedding = jnp.concatenate([agent_embedder(agent_specific_obs[:, :, i, :]) for i in range(self.num_agents)], axis=-1)
 
-        # agent_embeddings = jnp.stack([agent_embedder(agent_specific_obs[:, :, i, :]) for i in range(self.num_agents)])
+        agent_embeddings = jnp.stack([agent_embedder(agent_specific_obs[:, :, i, :]) for i in range(self.num_agents)])
         # average across the agents
         # TODO: consider replacing mean-pooling with transformer (or other attn mechanism)
-        # pooled_agent_embedding = jnp.average(agent_embeddings, axis=0)
+        pooled_agent_embedding = jnp.average(agent_embeddings, axis=0)
+        # add agent's own embed to the pooled version (skip connection)
+        pooled_agent_embedding += agent_embeddings[0, ...]
 
         # NOTE: if fixing size-invariance above, change this hidden_dim
-        task_embedder = Embedder(hidden_dim=self.hidden_dim//4, init_scale=self.init_scale)
+        task_embedder = Embedder(hidden_dim=self.hidden_dim//2, init_scale=self.init_scale)
         task_embedding = task_embedder(task_specific_obs)
 
         embedding = jnp.concatenate([pooled_agent_embedding, task_embedding], axis=-1)
@@ -356,6 +341,8 @@ class AgentHyperRNN(nn.Module):
         q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
 
         return hidden, q_vals
+
+        cap = agent_specific_cap.reshape(time_steps, batch_size, -1)
 
         # transform capabilities via transformer before passing to cap_hypernet (if flag given)
         # TODO: fix transformer?
