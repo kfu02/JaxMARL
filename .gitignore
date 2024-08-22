@@ -19,3 +19,5 @@ models/
 
 # rollout videos
 **/*.gif
+multirun/
+baselines/QLearning/checkpoints/*

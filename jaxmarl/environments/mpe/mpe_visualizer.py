@@ -27,7 +27,7 @@ class MPEVisualizer(object):
     def animate(
         self,
         save_fname: Optional[str] = None,
-        view: bool = True,
+        view: bool = False,
     ):
         """Anim for 2D fct - x (#steps, #pop, 2) & fitness (#steps, #pop)"""
         ani = animation.FuncAnimation(
@@ -41,8 +41,8 @@ class MPEVisualizer(object):
         if save_fname is not None:
             ani.save(save_fname)
 
-        if view:
-            plt.show(block=True)
+        # if view:
+        #     plt.show(block=True)
 
     def init_render(self):
         from matplotlib.patches import Circle
@@ -55,9 +55,22 @@ class MPEVisualizer(object):
         self.ax.set_ylim([-ax_lim, ax_lim])
         
         self.entity_artists = []
-        for i in range(self.env.num_entities):
+        for i in range(self.env.num_agents):
+            # c = Circle(
+            #     state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
+            # )
+            # draw agents as empty circles so they can be seen if they overlap
             c = Circle(
-                state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
+                state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
+            )
+
+            self.ax.add_patch(c)
+            self.entity_artists.append(c)
+
+        for j in range(self.env.num_landmarks):
+            i = j + self.env.num_agents
+            c = Circle(
+                state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
             )
             self.ax.add_patch(c)
             self.entity_artists.append(c)
