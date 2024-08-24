@@ -192,6 +192,130 @@ class AgentRNN(nn.Module):
 
         return hidden, q_vals
 
+class AgentHyperGNN(nn.Module):
+    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
+    action_dim: int
+    hidden_dim: int
+    init_scale: float
+    num_agents: int
+    num_capabilities: int
+    hypernet_hidden_dim: int
+    embedding_dim: int
+    hypernet_init_scale: float
+
+    @nn.compact
+    def __call__(self, hidden, x, train=False):
+        obs, dones = x
+
+        # separate obs into capabilities and observations
+        # (env gives obs = orig obs+cap)
+        # NOTE: this is hardcoded to match simple_spread's computation
+        dim_capabilities = self.num_agents * self.num_capabilities
+        cap = obs[:, :, -dim_capabilities:] # last dim_cap elements in obs are cap
+        obs = obs[:, :, :-dim_capabilities]
+
+        cap_repr = cap
+        time_steps, batch_size, obs_dim = obs.shape
+
+        # hypernetwork
+        # TODO: find the memory efficient version from the original paper
+        w_1 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
+        b_1 = nn.Dense(self.action_dim, kernel_init=orthogonal(self.hypernet_init_scale), bias_init=constant(0.))(cap_repr)
+        # w_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
+        # b_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
+        
+        # reshaping
+        w_1 = w_1.reshape(time_steps, batch_size, self.embedding_dim, self.action_dim)
+        b_1 = b_1.reshape(time_steps, batch_size, 1, self.action_dim)
+        # w_2 = w_2.reshape(time_steps, batch_size, self.embedding_dim, self.action_dim)
+        # b_2 = b_2.reshape(time_steps, batch_size, 1, self.action_dim)
+    
+        # apply as target network
+        embedding = nn.Dense(self.embedding_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
+
+        ##########################################################################################################################################
+        #
+        # GNN LOGIC
+        #
+        ##########################################################################################################################################
+        
+        # # save original embedding shape
+        # original_embedding_shape = embedding.shape
+
+        # # restore agent dimension (time_step, num_agents, num_envs, obs_dim)
+        # embedding = embedding.reshape(embedding.shape[0], self.num_agents, embedding.shape[1]//self.num_agents, -1)
+        
+        # # transpose agent dimension and env dimension (time_step, num_envs, num_agents, obs_dim)
+        # embedding = embedding.transpose(0, 2, 1, 3)
+
+        # # squash first two dimensions into a large batch dimension (time_step * num_envs, num_agents, obs_dim)
+        # embedding = embedding.reshape(embedding.shape[0]*embedding.shape[1], self.num_agents, -1)
+
+        # # apply gat layer
+        # gnn = GATLayer(c_out=self.embedding_dim, num_heads=2, num_agents=self.num_agents, init_scale=self.init_scale)
+        # adj_matrix = jnp.ones((embedding.shape[0], self.num_agents, self.num_agents)) - jnp.eye(self.num_agents)
+        # embedding = gnn(node_feats=embedding, adj_matrix=adj_matrix)
+
+        # # restore squashed batch dimension (time_step, num_envs, num_agents, obs_dim)
+        # embedding = embedding.reshape(original_embedding_shape[0], original_embedding_shape[1] // self.num_agents, self.num_agents, original_embedding_shape[2])
+
+        # # transpose back to (time_step, num_agents, num_envs, obs_dim)
+        # embedding = embedding.transpose(0, 2, 1, 3)
+
+        # # restore original batch dimension
+        # embedding = embedding.reshape(original_embedding_shape)
+
+        ##########################################################################################################################################
+        #
+        # END GNN LOGIC
+        #
+        ##########################################################################################################################################
+
+        q_vals = jnp.matmul(embedding[:, :, None, :], w_1) + b_1
+
+        ##########################################################################################################################################
+        #
+        # GNN LOGIC
+        #
+        ##########################################################################################################################################
+
+        # initialize GNN, assume fully connected graph with no self loops
+        # save original embedding shape
+        original_q_vals_shape = q_vals.shape
+
+        # restore agent dimension (time_step, num_agents, num_envs, obs_dim)
+        q_vals = q_vals.reshape(q_vals.shape[0], self.num_agents, q_vals.shape[1]//self.num_agents, -1)
+        
+        # transpose agent dimension and env dimension (time_step, num_envs, num_agents, obs_dim)
+        q_vals = q_vals.transpose(0, 2, 1, 3)
+
+        # squash first two dimensions into a large batch dimension (time_step * num_envs, num_agents, obs_dim)
+        q_vals = q_vals.reshape(q_vals.shape[0]*q_vals.shape[1], self.num_agents, -1)
+
+        # apply gat layer
+        gnn = GATLayer(c_out=self.embedding_dim, num_heads=2, num_agents=self.num_agents, init_scale=self.init_scale)
+        adj_matrix = jnp.ones((q_vals.shape[0], self.num_agents, self.num_agents)) - jnp.eye(self.num_agents)
+        q_vals_embedding = gnn(node_feats=q_vals, adj_matrix=adj_matrix)
+
+        # restore squashed batch dimension (time_step, num_envs, num_agents, obs_dim)
+        q_vals_embedding = q_vals_embedding.reshape(original_q_vals_shape[0], original_q_vals_shape[1] // self.num_agents, self.num_agents, self.embedding_dim)
+
+        # transpose back to (time_step, num_agents, num_envs, obs_dim)
+        q_vals_embedding = q_vals_embedding.transpose(0, 2, 1, 3)
+
+        # restore original batch dimension
+        q_vals_embedding = q_vals_embedding.reshape(original_q_vals_shape[0], original_q_vals_shape[1], self.embedding_dim)
+
+        ##########################################################################################################################################
+        #
+        # END GNN LOGIC
+        #
+        ##########################################################################################################################################
+
+        # add dense layer to get updated q vals from node emebeddings
+        q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(q_vals_embedding)
+
+        return hidden, q_vals 
 
 # transformer
 class EncoderBlock(nn.Module):
@@ -357,6 +481,161 @@ class AgentHyperRNN(nn.Module):
 
         return hidden, q_vals
 
+class AgentHyperRNNGNN(nn.Module):
+    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
+    action_dim: int
+    hidden_dim: int
+    init_scale: float
+    hypernet_dim: int
+    hypernet_init_scale: int
+    num_capabilities: int # per agent
+    num_agents: int
+    use_capability_transformer: bool
+    transformer_kwargs: dict
+
+    @nn.compact
+    def __call__(self, hidden, x, train=True):
+        orig_obs, dones = x
+
+        # separate obs into capabilities and observations
+        # (env gives obs = orig obs+cap)
+        # NOTE: this is hardcoded to match simple_spread's computation
+        dim_capabilities = self.num_agents * self.num_capabilities
+        cap = orig_obs[:, :, -dim_capabilities:]
+        obs = orig_obs[:, :, :-dim_capabilities]
+        # jax.debug.print("cap {} obs {}", cap, obs)
+
+        # only feed obs through RNN encoder
+        embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
+        embedding = nn.relu(embedding)
+
+        rnn_in = (embedding, dones)
+        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+
+        # transform capabilities via transformer before passing to cap_hypernet (if flag given)
+        # TODO: fix transformer?
+        """
+        cap_repr = cap
+        if self.use_capability_transformer:
+            # break apart the capabilities by agent, so that attention is applied across agents
+            time_steps, batch_size, _ = cap.shape
+            reshaped_cap = jnp.reshape(cap, (time_steps * batch_size, self.num_agents, self.num_capabilities)) # ["batch_size", seq_len, tkn_len]
+
+            # apply a "positional embedding", but instead of the advanced cos/sin embedding, just add a 0/1 IS_SELF flag a la transfqmix (and IS_SELF should always be applied to the first agent)
+            is_self_flag = jnp.zeros((time_steps*batch_size, self.num_agents, 1)).at[:, 0, 0].set(1)
+            reshaped_cap = jnp.concatenate([reshaped_cap, is_self_flag], axis=-1)
+
+            # NOTE: rejected using an embedding to preprocess the capabilities as they are already semantically meaningful (and experimental evidence showed poorer performance)
+            transformer_encoder = TransformerEncoder(
+                input_dim=self.num_capabilities+1,
+                num_layers=self.transformer_kwargs["NUM_LAYERS"],
+                num_heads=self.transformer_kwargs["NUM_HEADS"],
+                dim_feedforward=self.transformer_kwargs["DIM_FF"],
+                init_scale=self.transformer_kwargs["INIT_SCALE"],
+                dropout_prob=self.transformer_kwargs["DROPOUT_PROB"],
+            )
+            transformed_cap = transformer_encoder(reshaped_cap, train=train)
+            # if not train:
+            #     jax.debug.print("orig cap {} -> {}", reshaped_cap[0, ...], transformed_cap[0, ...])
+
+            # only take the transformed version of the ego-agent's capabilities
+            cap_repr = transformed_cap[:, 0, :].reshape((time_steps, batch_size, -1))
+        """
+
+        # then use capability hypernet for last layer
+        time_steps, batch_size, obs_dim = obs.shape
+
+        num_weights = (self.hidden_dim * self.action_dim)
+        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
+        weights = weight_hypernet(cap).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
+
+        num_biases = self.action_dim
+        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
+        biases = bias_hypernet(cap).reshape(time_steps, batch_size, 1, self.action_dim)
+
+        # manually calculate q_vals = (embedding @ weights) + b
+        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
+        # with leading dims for time_steps, batch_size
+        initial_q_vals = jnp.matmul(embedding[:, :, None, :], weights) + biases
+        initial_q_vals = initial_q_vals.squeeze(axis=2) # remove extra dim needed for computation
+
+        # initialize GNN, assume fully connected graph with no self loops
+        if initial_q_vals.shape[1] > 1:
+            gnn = GATLayer(c_out=self.hidden_dim, num_heads=2, num_agents=self.num_agents, init_scale=self.init_scale)
+            adj_matrix = jnp.ones((batch_size, self.num_agents, self.num_agents)) - jnp.eye(self.num_agents)
+            gnn_out = gnn(node_feats=initial_q_vals, adj_matrix=adj_matrix)
+            q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(gnn_out)
+            q_vals = q_vals.reshape(q_vals.shape[0]*q_vals.shape[1]/self.num_agents, self.num_agents, self.action_dim)
+        else:
+            q_vals = initial_q_vals
+
+        return hidden, q_vals
+
+class GATLayer(nn.Module):
+    c_out : int  # Dimensionality of output features
+    num_heads : int  # Number of heads, i.e. attention mechanisms to apply in parallel.
+    num_agents : int # Number of agents
+    init_scale : float
+    concat_heads : bool = True  # If True, the output of the different heads is concatenated instead of averaged.
+    alpha : float = 0.2  # Negative slope of the LeakyReLU activation.
+
+    @nn.compact
+    def __call__(self, node_feats, adj_matrix, print_attn_probs=False):
+        """
+        Inputs:
+            node_feats - Input features of the node. Shape: [batch_size, num_nodes, c_in]
+            adj_matrix - Adjacency matrix including self-connections. Shape: [batch_size, num_nodes, num_nodes]
+            print_attn_probs - If True, the attention weights are printed during the forward pass (for debugging purposes)
+        """
+        if self.concat_heads:
+            assert self.c_out % self.num_heads == 0, "Number of output features must be a multiple of the count of heads."
+            c_out_per_head = self.c_out // self.num_heads
+        else:
+            c_out_per_head = self.c_out
+
+        # Sub-modules and parameters needed in the layer
+        projection = nn.Dense(c_out_per_head * self.num_heads, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))
+        a = self.param(
+            'a', 
+            nn.initializers.glorot_uniform(), 
+            (self.num_heads, 2 * c_out_per_head)
+        )
+
+        batch_size, num_nodes = node_feats.shape[0], node_feats.shape[1]
+
+        # Apply linear layer and sort nodes by head
+        node_feats = projection(node_feats)
+        node_feats = node_feats.reshape((batch_size, num_nodes, self.num_heads, -1))
+
+        # We need to calculate the attention logits for every edge in the adjacency matrix
+        # In order to take advantage of JAX's just-in-time compilation, we should not use
+        # arrays with shapes that depend on e.g. the number of edges. Hence, we calculate
+        # the logit for every possible combination of nodes. For efficiency, we can split
+        # a[Wh_i||Wh_j] = a_:d/2 * Wh_i + a_d/2: * Wh_j.
+        logit_parent = (node_feats * a[None,None,:,:a.shape[1]//2]).sum(axis=-1)
+        logit_child = (node_feats * a[None,None,:,a.shape[1]//2:]).sum(axis=-1)
+        attn_logits = logit_parent[:,:,None,:] + logit_child[:,None,:,:]
+        attn_logits = nn.leaky_relu(attn_logits, self.alpha)
+
+        # Mask out nodes that do not have an edge between them
+        attn_logits = jnp.where(adj_matrix[...,None] == 1.,
+                                attn_logits,
+                                jnp.ones_like(attn_logits) * (-9e15))
+
+        # Weighted average of attention
+        attn_probs = nn.softmax(attn_logits, axis=2)
+        if print_attn_probs:
+            print("Attention probs\n", attn_probs.transpose(0, 3, 1, 2))
+        node_feats = jnp.einsum('bijh,bjhc->bihc', attn_probs, node_feats)
+
+        # If heads should be concatenated, we can do this by reshaping. Otherwise, take mean
+        if self.concat_heads:
+            node_feats = node_feats.reshape(batch_size, num_nodes, -1)
+        else:
+            node_feats = node_feats.mean(axis=2)
+
+        return node_feats
+
 class HyperNetwork(nn.Module):
     """HyperNetwork for generating weights of QMix' mixing network."""
     hidden_dim: int
@@ -501,12 +780,15 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             else:
                 agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
 
+        # agent = AgentHyperRNNGNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+        agent = AgentHyperGNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_hidden_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], embedding_dim=config["AGENT_HYPERNET_EMBEDDING_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents)
+
         rng, _rng = jax.random.split(rng)
 
         if config["PARAMETERS_SHARING"]:
             init_x = (
-                jnp.zeros((1, 1, wrapped_env.obs_size)), # (time_step, batch_size, obs_size)
-                jnp.zeros((1, 1)) # (time_step, batch size)
+                jnp.zeros((1, len(log_train_env.agents)*config["NUM_ENVS"], wrapped_env.obs_size)), # (time_step, batch_size, obs_size)
+                jnp.zeros((1, len(log_train_env.agents)*config["NUM_ENVS"])) # (time_step, batch size)
             )
             init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], 1) # (batch_size, hidden_dim)
             agent_params = agent.init(_rng, init_hs, init_x)
@@ -957,6 +1239,7 @@ def main(config):
     recurrent_tag = "RNN" if config["alg"]["AGENT_RECURRENT"] else "MLP"
     aware_tag = "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware"
     cap_transf_tag = "transformer" if config["alg"]["AGENT_USE_CAPABILITY_TRANSFORMER"] else "no-transformer"
+    gnn_tag = "gnn" if config["alg"]["AGENT_GNN"] else "no-gnn"
 
     wandb_tags = [
         alg_name.upper(),
@@ -976,7 +1259,7 @@ def main(config):
         entity=config["ENTITY"],
         project=config["PROJECT"],
         tags=wandb_tags,
-        name=f'{hyper_tag} {recurrent_tag} {aware_tag} {cap_transf_tag} / {env_name}',
+        name=f'{hyper_tag} {recurrent_tag} {gnn_tag} {aware_tag} {cap_transf_tag} / {env_name}',
         config=config,
         mode=config["WANDB_MODE"],
     )
