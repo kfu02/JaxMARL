@@ -299,12 +299,34 @@ class AgentHyperRNN(nn.Module):
         dim_capabilities = self.num_agents * self.num_capabilities
         cap = orig_obs[:, :, -dim_capabilities:]
         obs = orig_obs[:, :, :-dim_capabilities]
+
+        time_steps, batch_size, obs_dim = obs.shape
         # jax.debug.print("cap {} obs {}", cap, obs)
 
-        # only feed obs through RNN encoder
+        # encoder
+        # original
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
         embedding = nn.relu(embedding)
 
+        # hypernet
+        """
+        hyper_input = obs_dim
+        hyper_output = self.hidden_dim
+        num_weights = (hyper_input * hyper_output)
+        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
+        weights = weight_hypernet(cap).reshape(time_steps, batch_size, hyper_input, hyper_output)
+
+        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=hyper_output, init_scale=0)
+        biases = bias_hypernet(cap).reshape(time_steps, batch_size, 1, hyper_output)
+
+        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
+        # with leading dims for time_steps, batch_size
+        embedding = jnp.matmul(obs[:, :, None, :], weights) + biases
+        embedding = embedding.squeeze(axis=2) # remove extra dim needed for computation
+        embedding = nn.relu(embedding)
+        """
+
+        # RNN 
         rnn_in = (embedding, dones)
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
 
@@ -338,9 +360,11 @@ class AgentHyperRNN(nn.Module):
             cap_repr = transformed_cap[:, 0, :].reshape((time_steps, batch_size, -1))
         """
 
-        # then use capability hypernet for last layer
-        time_steps, batch_size, obs_dim = obs.shape
+        # decoder
+        # original
+        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
 
+        # hypernet
         num_weights = (self.hidden_dim * self.action_dim)
         weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
         weights = weight_hypernet(cap).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
@@ -780,10 +804,11 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
 
             if config.get('WANDB_ONLINE_REPORT', False):
                 def callback(metrics, infos):
-                    info_metrics = {
-                        k:v[...,0][infos["returned_episode"][..., 0]].mean()
-                        for k,v in infos.items() if k!="returned_episode"
-                    }
+                    # NOTE: these do not work for MPE envs
+                    # info_metrics = {
+                    #     k:v[...,0][infos["returned_episode"][..., 0]].mean()
+                    #     for k,v in infos.items() if k!="returned_episode"
+                    # }
                     wandb.log(
                         {
                             "returns": metrics['rewards']['__all__'].mean(),
@@ -791,7 +816,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                             "updates": metrics['updates'],
                             "loss": metrics['loss'],
                             'epsilon': metrics['eps'],
-                            **info_metrics,
+                            # **info_metrics,
                             **{k:v.mean() for k, v in metrics['test_metrics'].items()}
                         }
                     )
@@ -846,34 +871,87 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             )
 
             # compute the pct of landmarks covered by an agent at the final timestep (across all envs)
-            # TODO: this only works for SimpleSpread, toggle it automatically somehow
-            def pct_landmarks_covered(final_step_state):
+            # NOTE this is not the same as success rate for fire env
+            # def pct_landmarks_covered(final_step_state):
+            #     final_env_state = final_step_state[1].env_state
+            #     p_pos = final_env_state.p_pos
+            #     rad = final_env_state.rad
+            #     n_agents = p_pos.shape[-2] // 2
+            #     n_envs = config["NUM_TEST_EPISODES"]
+            #
+            #     covered_landmarks = 0
+            #     for env in range(n_envs):
+            #         for landmark in range(n_agents):
+            #             # get dist of this landmark to all agents
+            #             landmark_pos = p_pos[env, n_agents+landmark, :]
+            #             agent_pos = p_pos[env, :n_agents, :]
+            #             delta_pos = agent_pos - landmark_pos
+            #             dist_to_agents = jnp.sqrt(jnp.sum(jnp.square(delta_pos), axis=1))
+            #
+            #             # then find the closest agent based on this array 
+            #             # if that agent's radius > its dist to landmark, it covers it, add to tally
+            #             closest_agent = jnp.argmin(dist_to_agents)
+            #             closest_agent_dist = dist_to_agents[closest_agent]
+            #             closest_agent_rad = rad[env, closest_agent]
+            #             covered_landmarks = jax.lax.select(closest_agent_rad > closest_agent_dist,
+            #                                                covered_landmarks+1,
+            #                                                covered_landmarks)
+            #
+            #     return covered_landmarks / (n_agents * n_envs) # divide by n_envs because we are tallying over all n_envs
+
+            def fire_env_metrics(final_step_state):
+                """
+                Return success rate (pct of envs where both fires are put out)
+                and percent of fires which are put out, out of all fires.
+                """
                 final_env_state = final_step_state[1].env_state
+
                 p_pos = final_env_state.p_pos
-                rad = final_env_state.rad
-                n_agents = p_pos.shape[-2] // 2
-                n_envs = config["NUM_TEST_EPISODES"]
+                rads = final_env_state.rad
 
-                # TODO: if bored, try to vectorize over n_envs too
-                covered_landmarks = 0
-                for env in range(n_envs):
-                    for landmark in range(n_agents):
-                        # get dist of this landmark to all agents
-                        landmark_pos = p_pos[env, n_agents+landmark, :]
-                        agent_pos = p_pos[env, :n_agents, :]
-                        delta_pos = agent_pos - landmark_pos
-                        dist_to_agents = jnp.sqrt(jnp.sum(jnp.square(delta_pos), axis=1))
+                num_agents = len(log_test_env.agents)
+                num_landmarks = rads.shape[-1] - num_agents
+                num_envs = config["NUM_TEST_EPISODES"]
 
-                        # then find the closest agent based on this array 
-                        # if that agent's radius > its dist to landmark, it covers it, add to tally
-                        closest_agent = jnp.argmin(dist_to_agents)
-                        closest_agent_dist = dist_to_agents[closest_agent]
-                        closest_agent_rad = rad[env, closest_agent]
-                        covered_landmarks = jax.lax.select(closest_agent_rad > closest_agent_dist,
-                                                           covered_landmarks+1,
-                                                           covered_landmarks)
+                def _agent_in_range(agent_i: int, agent_p_pos, landmark_pos, landmark_rad):
+                    """
+                    Finds all agents in range of a single landmark.
+                    """
+                    delta_pos = agent_p_pos[agent_i] - landmark_pos
+                    dist = jnp.sqrt(jnp.sum(jnp.square(delta_pos)))
+                    return (dist < landmark_rad)
 
-                return covered_landmarks / (n_agents * n_envs) # divide by n_envs because we are tallying over all n_envs
+                def _fire_put_out(landmark_i: int, agent_p_pos, agent_rads, landmark_p_pos, landmark_rads):
+                    """
+                    Determines if a single landmark is covered by enough ff power.
+                    """
+                    landmark_pos = landmark_p_pos[landmark_i, :]
+                    landmark_rad = landmark_rads[landmark_i]
+
+                    agents_on_landmark = jax.vmap(_agent_in_range, in_axes=[0, None, None, None])(jnp.arange(num_agents), agent_p_pos, landmark_pos, landmark_rad)
+                    firefighting_level = jnp.sum(jnp.where(agents_on_landmark, agent_rads, 0))
+                    return firefighting_level > landmark_rad
+
+                def _fires_put_out_per_env(env_i, p_pos, rads):
+                    """
+                    Determines how many fires are covered in a single parallel env.
+                    """
+                    agent_p_pos = p_pos[env_i, :num_agents, :]
+                    landmark_p_pos = p_pos[env_i, num_agents:, :]
+
+                    agent_rads = rads[env_i, :num_agents]
+                    landmark_rads = rads[env_i, num_agents:]
+
+                    landmarks_covered = jax.vmap(_fire_put_out, in_axes=[0, None, None, None, None])(jnp.arange(num_landmarks), agent_p_pos, agent_rads, landmark_p_pos, landmark_rads)
+
+                    return landmarks_covered
+
+                fires_put_out = jax.vmap(_fires_put_out_per_env, in_axes=[0, None, None])(jnp.arange(num_envs), p_pos, rads)
+                # envs where num_landmarks fires are put out / total
+                success_rate = jnp.count_nonzero(jnp.sum(fires_put_out, axis=1) == num_landmarks) / num_envs
+                # sum of all fires put out / total num fires
+                pct_fires_put_out = jnp.sum(fires_put_out) / (num_envs * num_landmarks)
+                return success_rate, pct_fires_put_out
 
             # compute the metrics of the first episode that is done for each parallel env
             def first_episode_returns(rewards, dones):
@@ -883,9 +961,13 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             all_dones = dones['__all__']
             first_returns = jax.tree.map(lambda r: jax.vmap(first_episode_returns, in_axes=1)(r, all_dones), rewards)
             first_infos   = jax.tree.map(lambda i: jax.vmap(first_episode_returns, in_axes=1)(i[..., 0], all_dones), infos)
+            fire_env_metrics = fire_env_metrics(step_state)
             metrics = {
                 'test_returns': first_returns['__all__'],# episode returns
+                # NOTE: only works for simple spread
                 # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
+                'test_fire_success_rate': fire_env_metrics[0],
+                'test_pct_fires_put_out': fire_env_metrics[1],
                 **{'test_'+k:v for k,v in first_infos.items()},
             }
             if config.get('VERBOSE', False):

@@ -125,7 +125,6 @@ class SimpleFireMPE(SimpleMPE):
         for i, landmark_pos in enumerate(landmark_p_pos):
             landmark_rad = landmark_rads[i]
 
-            # TODO could vectorize the outer loop as well
             # take the sum of all agents ff on this landmark
             agents_on_landmark = jax.vmap(_agent_in_range, in_axes=[0, None, None])(self.agent_range, landmark_pos, landmark_rad)
             firefighting_level = jnp.sum(jnp.where(agents_on_landmark, agent_rads, 0))
@@ -136,8 +135,9 @@ class SimpleFireMPE(SimpleMPE):
 
             # dense rew for firefighting
             enough_firefight = firefighting_level >= landmark_rads[i]
-            # NOTE: give +1 if enough firefighting, else reward based on how
-            # much of fire is covered (fire rad range 0.1-0.4)
+            # NOTE: give +1 if enough firefighting, else reward based on how much of fire is covered 
+            # (since !enough_firefight means ff_level < landmark_rads, this second term is always < 0)
+            # (also, fire_rad = 0.1 to 0.4)
             ff_rew = jnp.where(enough_firefight, 1, 2*(firefighting_level-landmark_rads[i]))
 
             # only add reward if this fire is valid (rad > 0)
@@ -155,6 +155,7 @@ class SimpleFireMPE(SimpleMPE):
         def _agent_rew(agent_i):
             agent_pos = state.p_pos[agent_i]
             dists = _dist_to_landmarks(agent_pos)
+            # TODO: set rew to 0 if agent is within landmark rad
             return -jnp.min(dists)
 
         rew = {
