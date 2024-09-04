@@ -461,6 +461,58 @@ class AgentHyperRNN(nn.Module):
 
         return hidden, q_vals
 
+class AgentResidualHyperRNN(nn.Module):
+    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
+    action_dim: int
+    hidden_dim: int
+    init_scale: float
+    hypernet_dim: int
+    hypernet_init_scale: int
+    num_capabilities: int # per agent
+    num_agents: int
+    use_capability_transformer: bool
+    transformer_kwargs: dict
+
+    @nn.compact
+    def __call__(self, hidden, x, train=False):
+        orig_obs, dones = x
+
+        # separate obs into capabilities and observations
+        # (env gives obs = orig obs+cap)
+        # NOTE: this is hardcoded to match simple_spread's computation
+        dim_capabilities = self.num_agents * self.num_capabilities
+        cap = orig_obs[:, :, -dim_capabilities:]
+        obs = orig_obs[:, :, :-dim_capabilities]
+
+        # hypernetwork
+        w_1 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=obs_dim*self.embedding_dim, init_scale=self.init_scale)(cap_repr)
+        b_1 = nn.Dense(self.embedding_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(cap_repr)
+        w_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.init_scale)(cap_repr)
+        b_2 = nn.Dense(self.action_dim, kernel_init=orthogonal(self.hypernet_init_scale), bias_init=constant(0.))(cap_repr)
+        
+        # reshaping
+        w_1 = w_1.reshape(time_steps, batch_size, obs_dim, self.embedding_dim)
+        b_1 = b_1.reshape(time_steps, batch_size, 1, self.embedding_dim)
+        w_2 = w_2.reshape(time_steps, batch_size, self.embedding_dim, self.action_dim)
+        b_2 = b_2.reshape(time_steps, batch_size, 1, self.action_dim)
+
+        # get initial q vals
+        embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
+        embedding = nn.relu(embedding)
+        rnn_in = (embedding, dones)
+        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+        q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
+
+        # apply target network to compute residual
+        x_1 = nn.elu(jnp.matmul(obs[:, :, None, :], w_1) + b_1)
+        residual  = jnp.matmul(x_1, w_2) + b_2
+        residual = residual.squeeze(axis=2) # remove extra dim needed for computation
+
+        # apply residual
+        q_vals = q_vals + residual
+
+        return hidden, q_vals
+
 class AgentResidualHyperMLP(nn.Module):
     # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
     action_dim: int
@@ -662,7 +714,10 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             if not config["AGENT_HYPERAWARE"]:
                 agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
             else:
-                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+                if config["AGENT_RESIDUAL"]:
+                    agent = AgentResidualHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+                else:
+                    agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
 
         rng, _rng = jax.random.split(rng)
 

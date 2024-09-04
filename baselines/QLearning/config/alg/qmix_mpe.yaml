@@ -8,7 +8,7 @@
 # agent network params
 "PARAMETERS_SHARING": True
 "AGENT_HIDDEN_DIM": 64 # width of the RNN hidden dim + surrounding MLP layers
-"AGENT_RECURRENT": False
+"AGENT_RECURRENT": True
 "AGENT_INIT_SCALE": 2.
 "AGENT_HYPERAWARE": True # False
 "AGENT_HYPERNET_HIDDEN_DIM": 16 # width of hypernet
@@ -23,7 +23,7 @@
   "INIT_SCALE": 0.01 # NOTE: Xavier init doesn't allow for this, switched to orthogonal which does
   "DROPOUT_PROB": 0.0
 
-"AGENT_RESIDUAL": True
+"AGENT_RESIDUAL": False
 
 "EPSILON_START": 1.0
 "EPSILON_FINISH": 0.05
