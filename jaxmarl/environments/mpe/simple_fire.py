@@ -61,6 +61,8 @@ class SimpleFireMPE(SimpleMPE):
             other_pos = jnp.roll(state.p_pos, shift=self.num_agents - aidx - 1, axis=0)[
                 : self.num_agents - 1
             ]
+            # transform to relative pos
+            rel_other_pos = other_pos - ego_pos
 
             ego_vel = state.p_vel[aidx, :]
             # use jnp.roll to remove ego agent from other_vel and other_vel arrays
@@ -84,16 +86,18 @@ class SimpleFireMPE(SimpleMPE):
 
             # give agents the pos and rad of all landmarks (fires)
             landmark_p_pos = state.p_pos[self.num_agents:]
+            # transform to relative pos
+            rel_landmark_p_pos = landmark_p_pos - ego_pos
             landmark_rads = state.rad[self.num_agents:]
 
             obs = jnp.concatenate([
                 # ego agent attributes, then, teammate attr
                 # for each of pos/vel/cap, in same order, in matching order
                 ego_pos.flatten(),  # 2
-                other_pos.flatten(),  # N-1, 2
+                rel_other_pos.flatten(),  # N-1, 2
                 ego_vel.flatten(),  # 2
                 other_vel.flatten(),  # N-1, 2
-                landmark_p_pos.flatten(), # 2, 2
+                rel_landmark_p_pos.flatten(), # 2, 2
                 landmark_rads.flatten(), # 1, 2
                 # NOTE: caps must go last for hypernet logic
                 ego_cap.flatten(),  # n_cap
