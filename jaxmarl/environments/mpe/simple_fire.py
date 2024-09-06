@@ -133,16 +133,11 @@ class SimpleFireMPE(SimpleMPE):
             agents_on_landmark = jax.vmap(_agent_in_range, in_axes=[0, None, None])(self.agent_range, landmark_pos, landmark_rad)
             firefighting_level = jnp.sum(jnp.where(agents_on_landmark, agent_rads, 0))
 
-            # if ff is enough, reward the team, otherwise penalize it
-            # enough_firefight = firefighting_level >= landmark_rads[i]
-            # global_rew = jnp.where(enough_firefight, global_rew + 1, global_rew - 1)
-
             # dense rew for firefighting
             enough_firefight = firefighting_level >= landmark_rads[i]
-            # NOTE: give +1 if enough firefighting, else reward based on how much of fire is covered 
+            # NOTE: reward based on how much of fire is covered, but cap at 0
             # (since !enough_firefight means ff_level < landmark_rads, this second term is always < 0)
-            # (also, fire_rad = 0.1 to 0.4)
-            ff_rew = jnp.where(enough_firefight, 1, 2*(firefighting_level-landmark_rads[i]))
+            ff_rew = jnp.where(enough_firefight, 0, 2*(firefighting_level-landmark_rads[i]))
 
             # only add reward if this fire is valid (rad > 0)
             global_rew = jnp.where(landmark_rad > 0, global_rew+ff_rew, global_rew)
