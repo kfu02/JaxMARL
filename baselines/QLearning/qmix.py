@@ -303,52 +303,26 @@ class AgentHyperRNN(nn.Module):
         time_steps, batch_size, obs_dim = obs.shape
         # jax.debug.print("cap {} obs {}", cap, obs)
 
-        # joint hypernet cap embedding
-        cap_embedding = nn.Dense(16, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(cap)
-        cap_embedding = nn.relu(cap_embedding)
-        cap_embedding = nn.Dense(16, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(cap_embedding)
-
-        # encoder hypernet
-        encoder_input = obs_dim
-        encoder_output = self.hidden_dim
-        encoder_weights = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=(encoder_input * encoder_output), init_scale=self.hypernet_init_scale)(cap_embedding).reshape(time_steps, batch_size, encoder_input, encoder_output)
-        encoder_biases = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=encoder_output, init_scale=0)(cap_embedding).reshape(time_steps, batch_size, 1, encoder_output)
-
-        # decoder hypernet
-        decoder_input = self.hidden_dim
-        decoder_output = self.action_dim
-        decoder_weights = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=(decoder_input * decoder_output), init_scale=self.hypernet_init_scale)(cap_embedding).reshape(time_steps, batch_size, decoder_input, decoder_output)
-        decoder_biases = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=decoder_output, init_scale=0)(cap_embedding).reshape(time_steps, batch_size, 1, decoder_output)
-
-        # encoder pass
-        # slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
-        # with leading dims for time_steps, batch_size
-        embedding = jnp.matmul(obs[:, :, None, :], encoder_weights) + encoder_biases
-        embedding = embedding.squeeze(axis=2) # remove extra dim needed for computation
-        embedding = nn.relu(embedding)
-
         # encoder
         # original
-        # embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
-        # embedding = nn.relu(embedding)
+        embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
+        embedding = nn.relu(embedding)
 
         # hypernet
-        """
-        hyper_input = obs_dim
-        hyper_output = self.hidden_dim
-        num_weights = (hyper_input * hyper_output)
-        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        weights = weight_hypernet(cap).reshape(time_steps, batch_size, hyper_input, hyper_output)
+        # hyper_input = obs_dim
+        # hyper_output = self.hidden_dim
+        # num_weights = (hyper_input * hyper_output)
+        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
+        # weights = weight_hypernet(cap).reshape(time_steps, batch_size, hyper_input, hyper_output)
+        #
+        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=hyper_output, init_scale=0)
+        # biases = bias_hypernet(cap).reshape(time_steps, batch_size, 1, hyper_output)
 
-        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=hyper_output, init_scale=0)
-        biases = bias_hypernet(cap).reshape(time_steps, batch_size, 1, hyper_output)
-
-        # slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
+        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
         # with leading dims for time_steps, batch_size
-        embedding = jnp.matmul(obs[:, :, None, :], weights) + biases
-        embedding = embedding.squeeze(axis=2) # remove extra dim needed for computation
-        embedding = nn.relu(embedding)
-        """
+        # embedding = jnp.matmul(obs[:, :, None, :], weights) + biases
+        # embedding = embedding.squeeze(axis=2) # remove extra dim needed for computation
+        # embedding = nn.relu(embedding)
 
         # RNN 
         rnn_in = (embedding, dones)
@@ -389,24 +363,18 @@ class AgentHyperRNN(nn.Module):
         # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
 
         # hypernet
-        """
         num_weights = (self.hidden_dim * self.action_dim)
         weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        weights = weight_hypernet(cap).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
+        weights = weight_hypernet(orig_obs).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
 
         num_biases = self.action_dim
         bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
-        biases = bias_hypernet(cap).reshape(time_steps, batch_size, 1, self.action_dim)
+        biases = bias_hypernet(orig_obs).reshape(time_steps, batch_size, 1, self.action_dim)
 
         # manually calculate q_vals = (embedding @ weights) + b
-        # slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
+        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
         # with leading dims for time_steps, batch_size
         q_vals = jnp.matmul(embedding[:, :, None, :], weights) + biases
-        q_vals = q_vals.squeeze(axis=2) # remove extra dim needed for computation
-        """
-
-        # decoder pass
-        q_vals = jnp.matmul(embedding[:, :, None, :], decoder_weights) + decoder_biases
         q_vals = q_vals.squeeze(axis=2) # remove extra dim needed for computation
 
         return hidden, q_vals
