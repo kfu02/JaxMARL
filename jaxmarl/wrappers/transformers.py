@@ -27,8 +27,18 @@ class TransformersCTRolloutManager(CTRolloutManager):
                 self._env.get_obs = self.spread_wrapped_get_obs
             self.global_state = lambda obs, state: obs['world_state']
         
+        # FIRE
+        elif 'fire' in env.name.lower():
+            # For SPREAD it is simpler to build the obs from scratch as matrices
+            super().__init__(env, batch_size, training_agents=None, preprocess_obs=False)
+            if any(issubclass(parent, JaxMARLWrapper) for parent in type(env).__mro__): #apply the wrapped get_obs to the child env class
+                self._env._env.get_obs = self.fire_wrapped_get_obs
+            else:
+                self._env.get_obs = self.fire_wrapped_get_obs
+            self.global_state = lambda obs, state: obs['world_state']
+        
         else:
-            raise NotImplementedError('This implemention currently supports only MPE_spread and SMAX')
+            raise NotImplementedError('This implemention currently supports only MPE_spread, MPE_fire, and SMAX')
         
 
     @partial(jax.jit, static_argnums=0)
@@ -89,6 +99,69 @@ class TransformersCTRolloutManager(CTRolloutManager):
         obs['world_state'] = jnp.concatenate((
             state.p_pos,
             state.p_vel,
+            is_agent_feat[0][:, None]
+        ), axis=1)
+        
+        return obs
+
+    @partial(jax.jit, static_argnums=0)
+    def fire_wrapped_get_obs(self, state):
+        """
+        - Obs feats: [d_x, d_y, is_self, is_agent]
+        - State feats: [x, y, vel_x, vel_y, is_agent]
+        """
+        # relative position between agents and other entities
+        rel_pos = state.p_pos - state.p_pos[:self._env.num_agents, None, :]
+        is_self_feat  = (jnp.arange(self._env.num_entities) == jnp.arange(self._env.num_agents)[:, np.newaxis])
+        is_agent_feat = jnp.tile(
+            jnp.concatenate((jnp.ones(self._env.num_agents), jnp.zeros(self._env.num_landmarks))),
+            (self._env.num_agents, 1)
+        )
+
+        # agent capabilities capabilities
+        agent_cap = jnp.stack(
+            [
+                state.accel,
+                state.rad[:self.num_agents], # landmark rad is included in state.rad
+            ], 
+            axis=-1
+        )
+
+        # transfqmix expects the features of each entity to be the same. 0 pad the landmark features to account for this
+        landmark_rads = state.rad[self.num_agents:]
+        landmark_cap = jnp.stack(
+            [
+                jnp.zeros_like(landmark_rads),
+                landmark_rads
+            ],
+            axis=-1
+        )
+
+        # combine agent and landmark capabilities
+        cap = jnp.concat(
+            [
+                agent_cap,
+                landmark_cap
+            ]
+            axis=-2
+        )
+
+        feats = jnp.concatenate((
+            rel_pos,
+            cap,
+            is_self_feat[:, :, None],
+            is_agent_feat[:, :, None],
+        ), axis=2)
+
+        obs = {
+            a:feats[i]
+            for i, a in enumerate(self._env.agents)
+        }
+        
+        obs['world_state'] = jnp.concatenate((
+            state.p_pos,
+            state.p_vel,
+            cap,
             is_agent_feat[0][:, None]
         ), axis=1)
         
