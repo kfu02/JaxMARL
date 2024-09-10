@@ -142,13 +142,16 @@ class TransformersCTRolloutManager(CTRolloutManager):
             [
                 agent_cap,
                 landmark_cap
-            ]
+            ],
             axis=-2
         )
 
+        # repeat to correctly concatenate to each agent's entry
+        obs_cap = jnp.tile(cap, (self._env.num_agents, 1, 1))
+
         feats = jnp.concatenate((
             rel_pos,
-            cap,
+            obs_cap,
             is_self_feat[:, :, None],
             is_agent_feat[:, :, None],
         ), axis=2)
