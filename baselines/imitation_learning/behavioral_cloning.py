@@ -49,68 +49,87 @@ def expert_heuristic_simple_fire(valid_set_partitions, num_landmarks, obs_dict, 
     """
     num_agents = len(obs_dict)
 
-    # TODO: need to move the task allocation step here
-    # then pass into "one_agent_one_env" along with the right agent indices
-    # in order for agents to agree on strategy (otherwise tied strategies render this meaningless)
+    def solve_one_env(obs):
+        """
+        For all agents in one env, obs will take the form [n_agents, obs_dim]. Solve the env for those agents.
 
-    def one_agent_one_env(obs):
-        # For one agent/env, the obs will always take the form
-        #   ego_pos, other_pos, ego_vel, other_vel, landmark_pos, landmark_rad, ego_cap, other_cap
+        Note task allocation only takes info from the first agent, as everything is fully observable from that POV.
+        """
 
+        # NOTE: this is derived from return type of get_obs() in simple_fire.py (vel is missing as it is irrelevant here)
         n_cap = 2
+        # unflatten to be indexable by agent
+        agent_pos = jnp.reshape(obs[0, :(num_agents*2)], (-1, 2))
+        ego_pos = jnp.reshape(agent_pos[0], (1,2))
+        rel_other_pos = agent_pos[1:]
+
+        # unflatten to be indexable by fire
+        rel_landmark_pos = jnp.reshape(obs[0, -(num_landmarks*2+num_landmarks+num_agents*n_cap):-(num_landmarks+num_agents*n_cap)], (-1, 2))
+        landmark_rad = obs[0, -(num_landmarks+num_agents*n_cap): -num_agents*n_cap]
         cap = obs[0, -num_agents*n_cap:]
+
         # concat a 0 to the end of the agent_rad
         # this is necessary to handle the padded -1s in valid_set_partitions, and should not mess up the true non-padded indices
         # (e.g. agent_rad = [1, 2, 3, 0], allocation [0,1], [2,-1] -> [1+2, 3+0], allocation [1,-1], [0,2] -> [2+0, 1+3]
         agent_rad = jnp.concatenate([cap[1::2], jnp.zeros(shape=(1,))])
-        landmark_rad = obs[0, -(num_landmarks+num_agents*n_cap): -num_agents*n_cap]
-        landmark_pos = jnp.reshape(obs[0, -(num_landmarks*2+num_landmarks+num_agents*n_cap):-(num_landmarks+num_agents*n_cap)], (-1, 2))
-        ego_pos = obs[0, :2]
 
-        all_rew = jnp.zeros(shape=(len(valid_set_partitions),))-10
         # for each possible allocation of agents to fires
         # (set partitions is a list of lists, e.g. [[0,1],[2]], which we can interpret as 0,1 => fire 0, 2 => fire 1)
+        all_rew = jnp.zeros(shape=(len(valid_set_partitions),))-10
         for a_i, allocation in enumerate(valid_set_partitions):
             # compute the reward if we allocated according to this split
             reward = 0
             for i in range(num_landmarks):
                 fire_ff = landmark_rad[i]
                 team_ff = jnp.sum(agent_rad[allocation[i]]) 
-                reward = team_ff - fire_ff
+                # cap positive reward per fire at 0
+                reward += jnp.where(team_ff >= fire_ff, 0, team_ff - fire_ff)
 
             # update all_rew
             all_rew = all_rew.at[a_i].set(reward)
 
-        # cap reward at 0 if team_ff > fire_ff
-        # all_rew = jnp.where(all_rew > 0, 0, all_rew)
+        # TODO: if all_rew < 0, the env is simply infeasible
+        # add a count for infeasible envs to create a ceiling on success metric
 
-        # based on rew, find the best allocation
+        # based on rew, find a best allocation (can be ties thanks to cap)
         best_index = jnp.argmax(all_rew).astype(int)
         best_allocation = valid_set_partitions[best_index]
 
-        # then find the index of the fire that robot 0 (ego-robot) is supposed to go to
-        # (size=1 bc can only be one place, based on valid_set_partitions)
-        # (first_index of that to get the row = fire_index)
-        my_fire_index = jnp.argwhere(best_allocation == 0, size=1)[0][0]
-        my_fire_pos = landmark_pos[my_fire_index]
+        # convert agent/fire pos to global coords
+        global_agent_pos = jnp.concatenate([ego_pos, ego_pos+rel_other_pos]) #[num_agents, 2]
+        global_fire_pos = ego_pos+rel_landmark_pos
 
-        unit_vectors = jnp.array([[0,0], [-1,0], [+1,0], [0,-1], [0,+1]])
-        dir_to_fire_pos = my_fire_pos - ego_pos
-        dir_to_fire_pos = dir_to_fire_pos / jnp.linalg.norm(dir_to_fire_pos)
-        dot = jnp.dot(unit_vectors, dir_to_fire_pos)
+        # jax.debug.print("obs {} global_fire_pos {}", obs, global_fire_pos)
 
-        # always pick the discrete action which maximizes progress towards fire
-        # (as measured by dot prod similarity of discrete action with desired heading vector)
-        # return 1 action per agent per env
-        best_action = jnp.argmax(dot)
-        # jax.debug.print("unit_vectors {} dir_to_fire_pos {} dot {} best {}", unit_vectors, dir_to_fire_pos, dot, best_action)
-        return best_action 
+        def best_action_for_agent(agent_i):
+            my_fire = jnp.argwhere(best_allocation == agent_i, size=1)[0][0]
+            
+            unit_vectors = jnp.array([[0,0], [-1,0], [+1,0], [0,-1], [0,+1]])
+            dir_to_fire_pos = global_fire_pos[my_fire] - global_agent_pos[agent_i]
+            dir_to_fire_pos = dir_to_fire_pos / jnp.linalg.norm(dir_to_fire_pos)
+            dot = jnp.dot(unit_vectors, dir_to_fire_pos)
 
+            # always pick the discrete action which maximizes progress towards fire
+            # (as measured by similarity of discrete action with desired heading vector)
+            best_action = jnp.argmax(dot)
+            # jax.debug.print("alloc {} agent_i {} my_fire {} fire_pos {} agent_pos {} act {}", best_allocation, agent_i, my_fire, fire_pos, agent_pos, best_action)
+            return best_action 
+
+        # then compute best actions for each agent based on assignment
+        all_best_actions = jax.vmap(best_action_for_agent)(jnp.arange(num_agents))
+        return all_best_actions
+
+    # stack obs to be per-env
+    all_obs = jnp.stack(list(obs_dict.values())) # [n_agents, ?, n_envs, obs_dim]
+    all_obs = all_obs.squeeze(1) # remove extra unknown dim
+
+    # iterate over n_envs
+    all_acts = jax.vmap(solve_one_env, in_axes=[1])(all_obs) # [n_envs, n_agents] (act_dim=1, squeezed out)
+
+    # then separate back into per-agent actions
     actions = {}
-    for agent, obs in obs_dict.items():
-        # obs : 1,8,24 = TS?, N_envs, obs_dim
-        # actions[agent] = jnp.zeros(shape=(obs.shape[1],), dtype=jnp.int32)
-        actions[agent] = jax.vmap(one_agent_one_env, in_axes=[1])(obs)
+    for i, agent_name in enumerate(obs_dict.keys()):
+        actions[agent_name] = all_acts[:, i]
 
     return actions
 
