@@ -7,7 +7,6 @@ from jaxmarl.environments.mpe.simple import SimpleMPE, State
 from jaxmarl.environments.mpe.default_params import *
 from gymnax.environments.spaces import Box
 
-
 class SimpleFireMPE(SimpleMPE):
     def __init__(
         self,
@@ -56,19 +55,23 @@ class SimpleFireMPE(SimpleMPE):
 
     def get_obs(self, state: State) -> Dict[str, chex.Array]:
         def _obs(aidx: int):
-            ego_pos = state.p_pos[aidx, :]
-            # use jnp.roll to remove ego agent from other_pos and other_vel arrays
-            other_pos = jnp.roll(state.p_pos, shift=self.num_agents - aidx - 1, axis=0)[
-                : self.num_agents - 1
-            ]
-            # transform to relative pos
-            rel_other_pos = other_pos - ego_pos
+            def shift_array(arr, i):
+                """
+                Assuming arr is 2D, moves row i to the front
+                """
+                i = i % arr.shape[0]
+                first_part = arr[i:]
+                second_part = arr[:i]
+                return jnp.concatenate([first_part, second_part])
+
+            # move ego_pos to front of agent_pos, then remove
+            agent_pos = state.p_pos[:self.num_agents, :]
+            other_pos = shift_array(agent_pos, aidx)
+            ego_pos = other_pos[0]
+            other_pos = other_pos[1:]
+            rel_other_pos = other_pos - ego_pos # and transform to relative pos
 
             ego_vel = state.p_vel[aidx, :]
-            # use jnp.roll to remove ego agent from other_vel and other_vel arrays
-            other_vel = jnp.roll(state.p_vel, shift=self.num_agents - aidx - 1, axis=0)[
-                : self.num_agents - 1
-            ]
 
             other_cap = jnp.stack([
                 state.accel.flatten(), state.rad[:self.num_agents].flatten(), # landmark rad is included in state.rad
@@ -91,12 +94,9 @@ class SimpleFireMPE(SimpleMPE):
             landmark_rads = state.rad[self.num_agents:]
 
             obs = jnp.concatenate([
-                # ego agent attributes, then, teammate attr
-                # for each of pos/vel/cap, in same order, in matching order
                 ego_pos.flatten(),  # 2
                 rel_other_pos.flatten(),  # N-1, 2
                 ego_vel.flatten(),  # 2
-                other_vel.flatten(),  # N-1, 2
                 rel_landmark_p_pos.flatten(), # 2, 2
                 landmark_rads.flatten(), # 1, 2
                 # NOTE: caps must go last for hypernet logic
