@@ -389,7 +389,7 @@ def tree_mean(tree):
     ).mean()
 
 
-def make_train(config, env):
+def make_train(config, env, env_test):
 
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -400,7 +400,7 @@ def make_train(config, env):
         # INIT ENV
         rng, _rng = jax.random.split(rng)
         wrapped_env = TransformersCTRolloutManager(env, batch_size=config["NUM_ENVS"])
-        test_env = TransformersCTRolloutManager(env, batch_size=config["NUM_TEST_EPISODES"]) # batched env for testing (has different batch size)
+        test_env = TransformersCTRolloutManager(env_test, batch_size=config["NUM_TEST_EPISODES"]) # batched env for testing (has different batch size)
         init_obs, env_state = wrapped_env.batch_reset(_rng)
         init_dones = {agent:jnp.zeros((config["NUM_ENVS"]), dtype=bool) for agent in env.agents+['__all__']}
 
@@ -864,7 +864,7 @@ def make_train(config, env):
             def _greedy_env_step(step_state, unused):
                 env_state, last_obs, last_dones, hstate, rng = step_state
                 rng, key_s = jax.random.split(rng)
-                obs_   = {a:last_obs[a] for a in env.agents}
+                obs_   = {a:last_obs[a] for a in env_test.agents}
                 obs_   = jax.tree_map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree_map(lambda x: x[np.newaxis, :], last_dones)
                 _, hstate, q_vals = homogeneous_pass(env_params, env_batch_norm, hstate, obs_, dones_, train=False)
@@ -874,9 +874,9 @@ def make_train(config, env):
                 return step_state, (rewards, dones, infos, env_state.env_state)
             rng, _rng = jax.random.split(rng)
             init_obs, env_state = test_env.batch_reset(_rng)
-            init_dones = {agent:jnp.zeros((config["NUM_TEST_EPISODES"]), dtype=bool) for agent in env.agents+['__all__']}
+            init_dones = {agent:jnp.zeros((config["NUM_TEST_EPISODES"]), dtype=bool) for agent in env_test.agents+['__all__']}
             rng, _rng = jax.random.split(rng)
-            hstate = ScannedTransformer.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env.agents)*config["NUM_TEST_EPISODES"], 1) # (n_agents*n_envs, hs_size)
+            hstate = ScannedTransformer.initialize_carry(config['AGENT_HIDDEN_DIM'], len(env_test.agents)*config["NUM_TEST_EPISODES"], 1) # (n_agents*n_envs, hs_size)
             step_state = (
                 env_state,
                 init_obs,
@@ -887,6 +887,61 @@ def make_train(config, env):
             step_state, (rewards, dones, infos, viz_env_states) = jax.lax.scan(
                 _greedy_env_step, step_state, None, config["NUM_STEPS"]
             )
+
+            def fire_env_metrics(final_step_state):
+                """
+                Return success rate (pct of envs where both fires are put out)
+                and percent of fires which are put out, out of all fires.
+                """
+                final_env_state = final_step_state[0].env_state
+
+                p_pos = final_env_state.p_pos
+                rads = final_env_state.rad
+
+                num_agents = len(env_test.agents)
+                num_landmarks = rads.shape[-1] - num_agents
+                num_envs = config["NUM_TEST_EPISODES"]
+
+                def _agent_in_range(agent_i: int, agent_p_pos, landmark_pos, landmark_rad):
+                    """
+                    Finds all agents in range of a single landmark.
+                    """
+                    delta_pos = agent_p_pos[agent_i] - landmark_pos
+                    dist = jnp.sqrt(jnp.sum(jnp.square(delta_pos)))
+                    return (dist < landmark_rad)
+
+                def _fire_put_out(landmark_i: int, agent_p_pos, agent_rads, landmark_p_pos, landmark_rads):
+                    """
+                    Determines if a single landmark is covered by enough ff power.
+                    """
+                    landmark_pos = landmark_p_pos[landmark_i, :]
+                    landmark_rad = landmark_rads[landmark_i]
+
+                    agents_on_landmark = jax.vmap(_agent_in_range, in_axes=[0, None, None, None])(jnp.arange(num_agents), agent_p_pos, landmark_pos, landmark_rad)
+                    firefighting_level = jnp.sum(jnp.where(agents_on_landmark, agent_rads, 0))
+                    return firefighting_level > landmark_rad
+
+                def _fires_put_out_per_env(env_i, p_pos, rads):
+                    """
+                    Determines how many fires are covered in a single parallel env.
+                    """
+                    agent_p_pos = p_pos[env_i, :num_agents, :]
+                    landmark_p_pos = p_pos[env_i, num_agents:, :]
+
+                    agent_rads = rads[env_i, :num_agents]
+                    landmark_rads = rads[env_i, num_agents:]
+
+                    landmarks_covered = jax.vmap(_fire_put_out, in_axes=[0, None, None, None, None])(jnp.arange(num_landmarks), agent_p_pos, agent_rads, landmark_p_pos, landmark_rads)
+
+                    return landmarks_covered
+
+                fires_put_out = jax.vmap(_fires_put_out_per_env, in_axes=[0, None, None])(jnp.arange(num_envs), p_pos, rads)
+                # envs where num_landmarks fires are put out / total
+                success_rate = jnp.count_nonzero(jnp.sum(fires_put_out, axis=1) == num_landmarks) / num_envs
+                # sum of all fires put out / total num fires
+                pct_fires_put_out = jnp.sum(fires_put_out) / (num_envs * num_landmarks)
+                return success_rate, pct_fires_put_out
+
             # compute the metrics of the first episode that is done for each parallel env
             def first_episode_returns(rewards, dones):
                 first_done = jax.lax.select(jnp.argmax(dones)==0., dones.size, jnp.argmax(dones))
@@ -895,7 +950,12 @@ def make_train(config, env):
             all_dones = dones['__all__']
             first_returns = jax.tree_map(lambda r: jax.vmap(first_episode_returns, in_axes=1)(r, all_dones), rewards)
             first_infos   = jax.tree_map(lambda i: jax.vmap(first_episode_returns, in_axes=1)(i[..., 0], all_dones), infos)
+            fire_env_metrics = fire_env_metrics(step_state)
             metrics = {
+                # firefighting env specific metrics
+                'test_fire_success_rate': fire_env_metrics[0],
+                'test_pct_fires_put_out': fire_env_metrics[1],
+                # default metrics
                 'test_returns': first_returns['__all__'],# episode returns
                 **{'test_'+k:v for k,v in first_infos.items()}
             }
@@ -978,7 +1038,7 @@ def single_run(config):
     
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], env)))
+    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], env, log_test_env)))
     outs = jax.block_until_ready(train_vjit(rngs))
     
     # save params
