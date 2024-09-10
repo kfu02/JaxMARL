@@ -35,6 +35,9 @@ from jaxmarl.wrappers.transformers import TransformersCTRolloutManager
 from jaxmarl.environments.smax import map_name_to_scenario
 from jaxmarl.environments.overcooked import overcooked_layouts 
 
+from jaxmarl.environments.mpe import MPEVisualizer
+from jaxmarl.environments.mpe.simple import State
+
 from typing import Any
 
 
@@ -587,7 +590,7 @@ def make_train(config, env):
         # TRAINING LOOP
         def _update_step(runner_state, unused):
 
-            train_state, target_network_state, env_state, buffer_state, time_state, init_obs, init_dones, test_metrics, rng = runner_state
+            train_state, target_network_state, env_state, buffer_state, time_state, init_obs, init_dones, test_metrics, viz_env_states, rng = runner_state
 
             # EPISODE STEP
             env_params = train_state.params['agent']
@@ -798,12 +801,13 @@ def make_train(config, env):
 
             # update the greedy rewards
             rng, _rng = jax.random.split(rng)
-            test_metrics = jax.lax.cond(
+            test_results = jax.lax.cond(
                 time_state['updates'] % (config["TEST_INTERVAL"] // config["NUM_STEPS"] // config["NUM_ENVS"]) == 0,
                 lambda _: get_greedy_metrics(_rng, train_state, time_state),
-                lambda _: test_metrics,
+                lambda _: {"metrics": test_metrics, "viz_env_states": viz_env_states},
                 operand=None
             )
+            test_metrics, viz_env_states = test_results["metrics"], test_results["viz_env_states"]
 
             # update the returning metrics
             metrics = {
@@ -844,6 +848,7 @@ def make_train(config, env):
                 init_obs,
                 init_dones,
                 test_metrics,
+                viz_env_states,
                 rng
             )
 
@@ -866,7 +871,7 @@ def make_train(config, env):
                 actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), q_vals, test_env.valid_actions)
                 obs, env_state, rewards, dones, infos = test_env.batch_step(key_s, env_state, actions)
                 step_state = (env_state, obs, dones, hstate, rng)
-                return step_state, (rewards, dones, infos)
+                return step_state, (rewards, dones, infos, env_state.env_state)
             rng, _rng = jax.random.split(rng)
             init_obs, env_state = test_env.batch_reset(_rng)
             init_dones = {agent:jnp.zeros((config["NUM_TEST_EPISODES"]), dtype=bool) for agent in env.agents+['__all__']}
@@ -879,7 +884,7 @@ def make_train(config, env):
                 hstate, 
                 _rng,
             )
-            step_state, (rewards, dones, infos) = jax.lax.scan(
+            step_state, (rewards, dones, infos, viz_env_states) = jax.lax.scan(
                 _greedy_env_step, step_state, None, config["NUM_STEPS"]
             )
             # compute the metrics of the first episode that is done for each parallel env
@@ -898,14 +903,15 @@ def make_train(config, env):
                 def callback(timestep, val):
                     print(f"Timestep: {timestep}, return: {val}")
                 jax.debug.callback(callback, time_state['timesteps']*config['NUM_ENVS'], first_returns['__all__'].mean())
-            return metrics
+            return {"metrics": metrics, "viz_env_states": viz_env_states}
 
         time_state = {
             'timesteps':jnp.array(0),
             'updates':  jnp.array(0)
         }
         rng, _rng = jax.random.split(rng)
-        test_metrics = get_greedy_metrics(_rng, train_state, time_state) # initial greedy metrics
+        greedy_ret = get_greedy_metrics(_rng, train_state, time_state) # initial greedy metrics
+        test_metrics, viz_env_states = greedy_ret["metrics"], greedy_ret["viz_env_states"] # initial greedy metrics
         
         # train
         rng, _rng = jax.random.split(rng)
@@ -918,6 +924,7 @@ def make_train(config, env):
             init_obs,
             init_dones,
             test_metrics,
+            viz_env_states,
             _rng
         )
         runner_state, metrics = jax.lax.scan(
@@ -951,6 +958,8 @@ def single_run(config):
     else:
         env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
         env = LogWrapper(env)
+        viz_test_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'], test_env_flag=True)
+        log_test_env = LogWrapper(viz_test_env)
 
     #config["alg"]["NUM_STEPS"] = config["alg"].get("NUM_STEPS", env.max_steps) # default steps defined by the env
     
@@ -985,6 +994,32 @@ def single_run(config):
         os.makedirs(save_dir, exist_ok=True)
         save_params(params, f'{save_dir}/{alg_name}.safetensors')
         print(f'Parameters of first batch saved in {save_dir}/{alg_name}.safetensors')
+
+        if config["VISUALIZE_FINAL_POLICY"]:
+            viz_env_states = outs['runner_state'][-2]
+
+            # build a list of states manually from vectorized seq returned by
+            # make_train() for desired seeds/envs
+            for seed in range(config["VIZ_NUM_SEEDS"]):
+                for env in range(config["VIZ_NUM_ENVS"]):
+                    state_seq = []
+                    for i in range(config["alg"]["NUM_STEPS"]):
+                        this_step_state = State(
+                            p_pos=viz_env_states.p_pos[seed, i, env, ...],
+                            p_vel=viz_env_states.p_vel[seed, i, env, ...],
+                            c=viz_env_states.c[seed, i, env, ...],
+                            accel=viz_env_states.accel[seed, i, env, ...],
+                            rad=viz_env_states.rad[seed, i, env, ...],
+                            done=viz_env_states.done[seed, i, env, ...],
+                            step=i,
+                        )
+                        state_seq.append(this_step_state)
+
+                    # save visualization to GIF for wandb display
+                    visualizer = MPEVisualizer(viz_test_env, state_seq)
+                    video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
+                    visualizer.animate(video_fpath)
+                    wandb.log({f"env-{env}-seed-{seed}-rollout": wandb.Video(video_fpath)})
 
 
 def tune(default_config):
