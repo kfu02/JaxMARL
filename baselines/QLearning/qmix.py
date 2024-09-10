@@ -635,6 +635,8 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 valid_q_vals = jax.tree_util.tree_map(lambda q, valid_idx: q.squeeze(0)[..., valid_idx], q_vals, wrapped_env.valid_actions)
                 # explore with epsilon greedy_exploration
                 actions = explorer.choose_actions(valid_q_vals, t, key_a)
+                # jax.debug.print("actions {}", actions)
+                # print(actions)
 
                 # STEP ENV
                 obs, env_state, rewards, dones, infos = wrapped_env.batch_step(key_s, env_state, actions)
