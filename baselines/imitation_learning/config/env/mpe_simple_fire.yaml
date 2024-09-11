@@ -7,6 +7,8 @@
   "num_capabilities": 2
   "num_agents": 3
 
+  "fire_rad_range": [0.2, 0.3]
+
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
   # NOTE: hijacking agent_rads = firefighting capability
   "agent_rads": [0.3, 0.2, 0.1, 0.1, 0.2]

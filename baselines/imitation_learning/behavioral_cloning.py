@@ -334,6 +334,13 @@ def make_expert_buffer(config, log_train_env):
         runner_state, (metrics, viz_env_states) = jax.lax.scan(
             collect_trajectory, runner_state, None, config["TRAJECTORIES_PER_ENV"]
         )
+
+        # find the mean of all metrics for this seed
+        metrics = jax.tree_util.tree_map(
+            lambda x: x.mean(),
+            metrics
+        )
+
         # then return info aggregated across all trajectories
         return {'runner_state': runner_state, 'metrics': metrics, "viz_env_states": viz_env_states}
 
@@ -432,9 +439,11 @@ def main(config):
 
     # need to wrap in callback for wandb.log to work w/ JAX
     def io_callback(metrics, traj_count):
+        print("-"* 10, metrics)
         # TODO: cleanup by making metrics a dict of str->value, then generalizing this log
-        # TODO: should be a distr across seeds, so somewhere before this I need to be taking a mean
-        wandb.log({"success_rate": metrics[0], "pct_fires_put_out": metrics[1], "traj_count": traj_count})
+        wandb.log({"success_rate": wandb.Histogram(metrics[0]),
+                   "pct_fires_put_out": wandb.Histogram(metrics[1]),
+                   "traj_count": traj_count[0]})
     jax.debug.callback(io_callback, expert_metrics, expert_traj_count)
     
     if config["VISUALIZE_FINAL_POLICY"]:

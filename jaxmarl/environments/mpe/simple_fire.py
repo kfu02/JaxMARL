@@ -38,6 +38,7 @@ class SimpleFireMPE(SimpleMPE):
 
         # Env specific parameters
         self.test_team = kwargs["test_team"] if "test_team" in kwargs else None
+        self.fire_rad_range = kwargs["fire_rad_range"] if "fire_rad_range" in kwargs else [0.1, 0.4]
         # Parameters
         # NOTE: rad now passed in, necessity for SimpleSpread modifications
         collide = jnp.concatenate(
@@ -177,7 +178,7 @@ class SimpleFireMPE(SimpleMPE):
         key_a, key_l, key_c, key_fr = jax.random.split(key, num=4)
 
         # spawn landmarks (fires) s.t. they don't overlap
-        landmark_rads = jax.random.uniform(key_fr, (self.num_landmarks,), minval=0.10, maxval=0.40)
+        landmark_rads = jax.random.uniform(key_fr, (self.num_landmarks,), minval=self.fire_rad_range[0], maxval=self.fire_rad_range[1])
 
         def _spawn_one_fire(carry, _):
             key_l, existing_fires, fire_index = carry
