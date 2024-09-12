@@ -1,0 +1,11 @@
+# TODO: how to transfer policies to RL? save and reload probably easiest
+
+NUM_ENVS: 8
+PARAMETERS_SHARING: True
+
+# NOTE: NUM_STEPS (max_steps_per_env) defined by env.yaml
+TRAJECTORIES_PER_ENV: 32
+# BUFFER_SIZE = NUM_ENVS * TRAJECTORIES_PER_ENV
+# TODO: I believe this batch size is actually 32 trajectories, not 32 steps
+BUFFER_BATCH_SIZE: 32
+# TRAIN_ITERS: 1000

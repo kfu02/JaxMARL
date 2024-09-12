@@ -868,42 +868,11 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 _greedy_env_step, step_state, None, config["NUM_STEPS"]
             )
 
-            # compute the pct of landmarks covered by an agent at the final timestep (across all envs)
-            # NOTE this is not the same as success rate for fire env
-            # def pct_landmarks_covered(final_step_state):
-            #     final_env_state = final_step_state[1].env_state
-            #     p_pos = final_env_state.p_pos
-            #     rad = final_env_state.rad
-            #     n_agents = p_pos.shape[-2] // 2
-            #     n_envs = config["NUM_TEST_EPISODES"]
-            #
-            #     covered_landmarks = 0
-            #     for env in range(n_envs):
-            #         for landmark in range(n_agents):
-            #             # get dist of this landmark to all agents
-            #             landmark_pos = p_pos[env, n_agents+landmark, :]
-            #             agent_pos = p_pos[env, :n_agents, :]
-            #             delta_pos = agent_pos - landmark_pos
-            #             dist_to_agents = jnp.sqrt(jnp.sum(jnp.square(delta_pos), axis=1))
-            #
-            #             # then find the closest agent based on this array 
-            #             # if that agent's radius > its dist to landmark, it covers it, add to tally
-            #             closest_agent = jnp.argmin(dist_to_agents)
-            #             closest_agent_dist = dist_to_agents[closest_agent]
-            #             closest_agent_rad = rad[env, closest_agent]
-            #             covered_landmarks = jax.lax.select(closest_agent_rad > closest_agent_dist,
-            #                                                covered_landmarks+1,
-            #                                                covered_landmarks)
-            #
-            #     return covered_landmarks / (n_agents * n_envs) # divide by n_envs because we are tallying over all n_envs
-
-            def fire_env_metrics(final_step_state):
+            def fire_env_metrics(final_env_state):
                 """
                 Return success rate (pct of envs where both fires are put out)
                 and percent of fires which are put out, out of all fires.
                 """
-                final_env_state = final_step_state[1].env_state
-
                 p_pos = final_env_state.p_pos
                 rads = final_env_state.rad
 
@@ -959,7 +928,9 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             all_dones = dones['__all__']
             first_returns = jax.tree.map(lambda r: jax.vmap(first_episode_returns, in_axes=1)(r, all_dones), rewards)
             first_infos   = jax.tree.map(lambda i: jax.vmap(first_episode_returns, in_axes=1)(i[..., 0], all_dones), infos)
-            fire_env_metrics = fire_env_metrics(step_state)
+
+            final_env_state = step_state[1].env_state
+            fire_env_metrics = fire_env_metrics(final_env_state)
             metrics = {
                 'test_returns': first_returns['__all__'],# episode returns
                 # NOTE: only works for simple spread
