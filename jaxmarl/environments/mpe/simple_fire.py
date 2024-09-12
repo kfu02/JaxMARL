@@ -144,7 +144,7 @@ class SimpleFireMPE(SimpleMPE):
             enough_firefight = firefighting_level >= landmark_rads[i]
             # NOTE: reward based on how much of fire is covered, but cap at 0
             # (since !enough_firefight means ff_level < landmark_rads, this second term is always < 0)
-            ff_rew = jnp.where(enough_firefight, 0, 2*(firefighting_level-landmark_rads[i]))
+            ff_rew = jnp.where(enough_firefight, 1, 2*(firefighting_level-landmark_rads[i]))
 
             # only add reward if this fire is valid (rad > 0)
             global_rew = jnp.where(landmark_rad > 0, global_rew+ff_rew, global_rew)
