@@ -38,7 +38,7 @@ class SimpleFireMPE(SimpleMPE):
 
         # Env specific parameters
         self.test_team = kwargs["test_team"] if "test_team" in kwargs else None
-        self.fire_rad_range = kwargs["fire_rad_range"] if "fire_rad_range" in kwargs else [0.1, 0.4]
+        self.fire_rad_range = kwargs["fire_rad_range"] if "fire_rad_range" in kwargs else [0.2, 0.3]
         # Parameters
         # NOTE: rad now passed in, necessity for SimpleSpread modifications
         collide = jnp.concatenate(
