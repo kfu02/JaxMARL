@@ -191,6 +191,103 @@ class AgentRNN(nn.Module):
 
         return hidden, q_vals
 
+class HyperGRU(nn.Module):
+    hidden_dim: int
+    hypernet_dim: int
+    init_scale: float
+
+    @partial(
+        nn.scan,
+        variable_broadcast="params",
+        in_axes=0,
+        out_axes=0,
+        split_rngs={"params": False},
+    )
+    @nn.compact
+    def __call__(self, hs, x, train=True):
+        hidden, hidden_hat = hs
+        # reset completed hidden states
+        x, resets = x
+        hidden = jnp.where(
+            resets[..., np.newaxis],
+            self.initialize_carry(self.hidden_dim, *x.shape[:-1]),
+            hidden,
+        )
+        hidden_hat = jnp.where(
+            resets[..., np.newaxis],
+            self.initialize_carry(self.hypernet_dim, *x.shape[:-1]),
+            hidden_hat,
+        )
+
+        # call hyper gru to get h_hat and y_hat
+        x_hat = jnp.concatenate((hidden_hat, x), axis=-1)
+        h_hat, y_hat = nn.GRUCell(self.hypernet_dim)(hidden_hat, x_hat)
+
+        # get embeddings
+        z_h = nn.Dense(3*self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(h_hat)
+        z_h = jnp.split(z_h, 3, axis=-1)
+        z_x = nn.Dense(3*self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(h_hat)
+        z_x = jnp.split(z_x, 3, axis=-1)
+        z_b = nn.Dense(3*self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(h_hat)
+        z_b = jnp.split(z_b, 3, axis=-1)
+
+        # get scaling vectors for r
+        d_r_h = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(z_h[0])
+        d_r_x = nn.Dense(self.hidden_dim,kernel_init=orthogonal(self.init_scale), use_bias=False)(z_x[0])
+        b_r = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(z_b[0])
+
+        # get scaling vectors for u
+        d_u_h = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(z_h[1])
+        d_u_x = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(z_x[1])
+        b_u = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(z_b[1])
+
+        # get scaling vectors for h_bar
+        d_hb_h = nn.Dense(self.hidden_dim, use_bias=False)(z_h[2])
+        d_hb_x = nn.Dense(self.hidden_dim, use_bias=False)(z_x[2])
+        b_hb = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(z_b[2])
+
+        # compute target cell update
+        r = nn.sigmoid(
+            d_r_x * nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(x)
+            + d_r_h * nn.Dense(self.hidden_dim)(hidden)
+            + b_r
+        )
+        h_bar = nn.tanh(
+            d_hb_x * nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(x)
+            + d_hb_h * nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(r * hidden)
+            + b_hb
+        ) 
+        u = nn.sigmoid(
+            d_u_x * nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(x)
+            + d_u_h * nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), use_bias=False)(hidden)
+            + b_u
+        )
+        h = (1. - u) * h_bar + u * hidden
+
+        return (h, h_hat), h
+
+    @staticmethod
+    def initialize_carry(hidden_size, *batch_size):
+        # Use a dummy key since the default state init fn is just zeros.
+        return nn.GRUCell(hidden_size, parent=None).initialize_carry(
+            jax.random.PRNGKey(0), (*batch_size, hidden_size)
+        )
+
+class AgentHyperGRU(nn.Module):
+    action_dim: int
+    hidden_dim: int
+    hypernet_dim: int
+    init_scale: float
+    
+    @nn.compact
+    def __call__(self, hidden, hidden_hat, x, train=True):
+        orig_obs, dones = x
+        embedding = nn.Dense(self.hypernet_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(orig_obs)
+        hs, embedding = HyperGRU(hidden_dim=self.hidden_dim, hypernet_dim=self.hypernet_dim, init_scale=self.init_scale)((hidden, hidden_hat), (embedding, dones))
+        hidden, hidden_hat = hs
+        q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
+
+        return hidden, hidden_hat, q_vals
 
 class AgentHyperRNN(nn.Module):
     # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
@@ -404,17 +501,26 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             if not config["AGENT_HYPERAWARE"]:
                 agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
             else:
-                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents)
+                agent = AgentHyperGRU(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"])
 
         rng, _rng = jax.random.split(rng)
 
         if config["PARAMETERS_SHARING"]:
-            init_x = (
-                jnp.zeros((1, 1, wrapped_env.obs_size)), # (time_step, batch_size, obs_size)
-                jnp.zeros((1, 1)) # (time_step, batch size)
-            )
-            init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], 1) # (batch_size, hidden_dim)
-            agent_params = agent.init(_rng, init_hs, init_x)
+            if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                init_x = (
+                    jnp.zeros((1, 1, wrapped_env.obs_size)), # (time_step, batch_size, obs_size)
+                    jnp.zeros((1, 1)) # (time_step, batch size)
+                )
+                init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], 1) # (batch_size, hidden_dim)
+                init_h_hats = ScannedRNN.initialize_carry(config['AGENT_HYPERNET_HIDDEN_DIM'], 1)
+                agent_params = agent.init(_rng, init_hs, init_h_hats, init_x)
+            else: 
+                init_x = (
+                    jnp.zeros((1, 1, wrapped_env.obs_size)), # (time_step, batch_size, obs_size)
+                    jnp.zeros((1, 1)) # (time_step, batch size)
+                )
+                init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], 1) # (batch_size, hidden_dim)
+                agent_params = agent.init(_rng, init_hs, init_x)
         else:
             init_x = (
                 jnp.zeros((len(log_train_env.agents), 1, 1, wrapped_env.obs_size)), # (time_step, batch_size, obs_size)
@@ -468,18 +574,32 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
 
         # depending if using parameters sharing or not, q-values are computed using one or multiple parameters
         if config["PARAMETERS_SHARING"]:
-            def homogeneous_pass(params, hidden_state, obs, dones, train=True):
-                # concatenate agents and parallel envs to process them in one batch
-                agents, flatten_agents_obs = zip(*obs.items())
-                original_shape = flatten_agents_obs[0].shape # assumes obs shape is the same for all agents
-                batched_input = (
-                    jnp.concatenate(flatten_agents_obs, axis=1), # (time_step, n_agents*n_envs, obs_size)
-                    jnp.concatenate([dones[agent] for agent in agents], axis=1), # ensure to not pass other keys (like __all__)
-                )
-                hidden_state, q_vals = agent.apply(params, hidden_state, batched_input, train=train)
-                q_vals = q_vals.reshape(original_shape[0], len(agents), *original_shape[1:-1], -1) # (time_steps, n_agents, n_envs, action_dim)
-                q_vals = {a:q_vals[:,i] for i,a in enumerate(agents)}
-                return hidden_state, q_vals
+            if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                def homogeneous_pass(params, hidden_state, hidden_state_hat, obs, dones, train=True):
+                    # concatenate agents and parallel envs to process them in one batch
+                    agents, flatten_agents_obs = zip(*obs.items())
+                    original_shape = flatten_agents_obs[0].shape # assumes obs shape is the same for all agents
+                    batched_input = (
+                        jnp.concatenate(flatten_agents_obs, axis=1), # (time_step, n_agents*n_envs, obs_size)
+                        jnp.concatenate([dones[agent] for agent in agents], axis=1), # ensure to not pass other keys (like __all__)
+                    )
+                    hidden_state, hidden_state_hat, q_vals = agent.apply(params, hidden_state, hidden_state_hat, batched_input, train=train)
+                    q_vals = q_vals.reshape(original_shape[0], len(agents), *original_shape[1:-1], -1) # (time_steps, n_agents, n_envs, action_dim)
+                    q_vals = {a:q_vals[:,i] for i,a in enumerate(agents)}
+                    return hidden_state, hidden_state_hat, q_vals
+            else:
+                def homogeneous_pass(params, hidden_state, obs, dones, train=True):
+                    # concatenate agents and parallel envs to process them in one batch
+                    agents, flatten_agents_obs = zip(*obs.items())
+                    original_shape = flatten_agents_obs[0].shape # assumes obs shape is the same for all agents
+                    batched_input = (
+                        jnp.concatenate(flatten_agents_obs, axis=1), # (time_step, n_agents*n_envs, obs_size)
+                        jnp.concatenate([dones[agent] for agent in agents], axis=1), # ensure to not pass other keys (like __all__)
+                    )
+                    hidden_state, q_vals = agent.apply(params, hidden_state, batched_input, train=train)
+                    q_vals = q_vals.reshape(original_shape[0], len(agents), *original_shape[1:-1], -1) # (time_steps, n_agents, n_envs, action_dim)
+                    q_vals = {a:q_vals[:,i] for i,a in enumerate(agents)}
+                    return hidden_state, q_vals
         else:
             def homogeneous_pass(params, hidden_state, obs, dones):
                 # homogeneous pass vmapped in respect to the agents parameters (i.e., no parameter sharing)
@@ -501,8 +621,10 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
 
             # EPISODE STEP
             def _env_step(step_state, unused):
-
-                params, env_state, last_obs, last_dones, hstate, rng, t = step_state
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    params, env_state, last_obs, last_dones, hstate, hstate_hat, rng, t = step_state
+                else:
+                    params, env_state, last_obs, last_dones, hstate, rng, t = step_state
 
                 # prepare rngs for actions and step
                 rng, key_a, key_s = jax.random.split(rng, 3)
@@ -513,7 +635,10 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
                 # get the q_values from the agent netwoek
-                hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_)
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    hstate, hstate_hat, q_vals = homogeneous_pass(params, hstate, hstate_hat, obs_, dones_)
+                else: 
+                    hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_)
                 # remove the dummy time_step dimension and index qs by the valid actions of each agent 
                 valid_q_vals = jax.tree_util.tree_map(lambda q, valid_idx: q.squeeze(0)[..., valid_idx], q_vals, wrapped_env.valid_actions)
                 # explore with epsilon greedy_exploration
@@ -523,26 +648,45 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 obs, env_state, rewards, dones, infos = wrapped_env.batch_step(key_s, env_state, actions)
                 transition = Transition(last_obs, actions, rewards, dones, infos)
 
-                step_state = (params, env_state, obs, dones, hstate, rng, t+1)
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    step_state = (params, env_state, obs, dones, hstate, hstate_hat, rng, t+1)
+                else:
+                    step_state = (params, env_state, obs, dones, hstate, rng, t+1)
                 return step_state, transition
 
 
             # prepare the step state and collect the episode trajectory
             rng, _rng = jax.random.split(rng)
             if config["PARAMETERS_SHARING"]:
-                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents)*config["NUM_ENVS"]) # (n_agents*n_envs, hs_size)
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents)*config["NUM_ENVS"])
+                    hstate_hat = ScannedRNN.initialize_carry(config['AGENT_HYPERNET_HIDDEN_DIM'], len(log_train_env.agents)*config["NUM_ENVS"])
+                else:
+                    hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents)*config["NUM_ENVS"]) # (n_agents*n_envs, hs_size)
             else:
                 hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents), config["NUM_ENVS"]) # (n_agents, n_envs, hs_size)
-
-            step_state = (
-                train_state.params['agent'],
-                env_state,
-                init_obs,
-                init_dones,
-                hstate, 
-                _rng,
-                time_state['timesteps'] # t is needed to compute epsilon
-            )
+            
+            if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                step_state = (
+                    train_state.params['agent'],
+                    env_state,
+                    init_obs,
+                    init_dones,
+                    hstate,
+                    hstate_hat,
+                    _rng,
+                    time_state['timesteps'] # t is needed to compute epsilon
+                )
+            else:
+                step_state = (
+                    train_state.params['agent'],
+                    env_state,
+                    init_obs,
+                    init_dones,
+                    hstate, 
+                    _rng,
+                    time_state['timesteps'] # t is needed to compute epsilon
+                )
 
             step_state, traj_batch = jax.lax.scan(
                 _env_step, step_state, None, config["NUM_STEPS"]
@@ -561,11 +705,15 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 q_u = jnp.take_along_axis(q, jnp.expand_dims(u, axis=-1), axis=-1)
                 return jnp.squeeze(q_u, axis=-1)
 
-            def _loss_fn(params, target_network_params, init_hstate, learn_traj):
+            def _loss_fn(params, target_network_params, learn_traj, init_hstate, init_hstate_hat=None):
 
                 obs_ = {a:learn_traj.obs[a] for a in log_train_env.agents} # ensure to not pass the global state (obs["__all__"]) to the network
-                _, q_vals = homogeneous_pass(params['agent'], init_hstate, obs_, learn_traj.dones)
-                _, target_q_vals = homogeneous_pass(target_network_params['agent'], init_hstate, obs_, learn_traj.dones)
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    _, _, q_vals = homogeneous_pass(params['agent'], init_hstate, init_hstate_hat, obs_, learn_traj.dones)
+                    _, _, target_q_vals = homogeneous_pass(target_network_params['agent'], init_hstate, init_hstate_hat, obs_, learn_traj.dones)
+                else:
+                    _, q_vals = homogeneous_pass(params['agent'], init_hstate, obs_, learn_traj.dones)
+                    _, target_q_vals = homogeneous_pass(target_network_params['agent'], init_hstate, obs_, learn_traj.dones)
 
                 # get the q_vals of the taken actions (with exploration) for each agent
                 chosen_action_qvals = jax.tree.map(
@@ -635,13 +783,20 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 learn_traj
             ) # (max_time_steps, batch_size, ...)
             if config["PARAMETERS_SHARING"]:
-                init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents)*config["BUFFER_BATCH_SIZE"]) # (n_agents*batch_size, hs_size)
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents)*config["BUFFER_BATCH_SIZE"]) # (n_agents*batch_size, hs_size)
+                    init_h_hats = ScannedRNN.initialize_carry(config['AGENT_HYPERNET_HIDDEN_DIM'], len(log_train_env.agents)*config["BUFFER_BATCH_SIZE"]) # (n_agents*batch_size, hs_size)
+                else:
+                    init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents)*config["BUFFER_BATCH_SIZE"]) # (n_agents*batch_size, hs_size)
             else:
                 init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_train_env.agents), config["BUFFER_BATCH_SIZE"]) # (n_agents, batch_size, hs_size)
 
             # compute loss and optimize grad
             grad_fn = jax.value_and_grad(_loss_fn, has_aux=False)
-            loss, grads = grad_fn(train_state.params, target_network_params, init_hs, learn_traj)
+            if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                loss, grads = grad_fn(train_state.params, target_network_params, learn_traj, init_hs, init_h_hats)
+            else:
+                loss, grads = grad_fn(train_state.params, target_network_params, learn_traj, init_hs)
             train_state = train_state.apply_gradients(grads=grads)
 
 
@@ -721,32 +876,56 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
         def get_greedy_metrics(rng, params, time_state):
             """Help function to test greedy policy during training"""
             def _greedy_env_step(step_state, unused):
-                params, env_state, last_obs, last_dones, hstate, rng = step_state
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    params, env_state, last_obs, last_dones, hstate, hstate_hat, rng = step_state
+                else:
+                    params, env_state, last_obs, last_dones, hstate, rng = step_state
                 rng, key_s = jax.random.split(rng)
                 obs_   = {a:last_obs[a] for a in log_test_env.agents}
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
-                hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_, train=False)
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    hstate, hstate_hat, q_vals = homogeneous_pass(params, hstate, hstate_hat, obs_, dones_, train=False)
+                else:
+                    hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_, train=False)
                 actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), q_vals, test_env.valid_actions)
                 obs, env_state, rewards, dones, infos = test_env.batch_step(key_s, env_state, actions)
-                step_state = (params, env_state, obs, dones, hstate, rng)
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    step_state = (params, env_state, obs, dones, hstate, hstate_hat, rng)
+                else:
+                    step_state = (params, env_state, obs, dones, hstate, rng)
                 return step_state, (rewards, dones, infos, env_state.env_state) # save all EnvState (not LogEnvState) to visualize
             rng, _rng = jax.random.split(rng)
             init_obs, env_state = test_env.batch_reset(_rng)
             init_dones = {agent:jnp.zeros((config["NUM_TEST_EPISODES"]), dtype=bool) for agent in log_test_env.agents+['__all__']}
             rng, _rng = jax.random.split(rng)
             if config["PARAMETERS_SHARING"]:
-                hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_test_env.agents)*config["NUM_TEST_EPISODES"]) # (n_agents*n_envs, hs_size)
+                if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                    hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_test_env.agents)*config["NUM_TEST_EPISODES"]) # (n_agents*n_envs, hs_size)
+                    hstate_hat = ScannedRNN.initialize_carry(config['AGENT_HYPERNET_HIDDEN_DIM'], len(log_test_env.agents)*config["NUM_TEST_EPISODES"])
+                else:
+                    hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_test_env.agents)*config["NUM_TEST_EPISODES"]) # (n_agents*n_envs, hs_size)
             else:
                 hstate = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(log_test_env.agents), config["NUM_TEST_EPISODES"]) # (n_agents, n_envs, hs_size)
-            step_state = (
-                params,
-                env_state,
-                init_obs,
-                init_dones,
-                hstate, 
-                _rng,
-            )
+            if config["AGENT_RECURRENT"] and config["AGENT_HYPERAWARE"]:
+                step_state = (
+                    params,
+                    env_state,
+                    init_obs,
+                    init_dones,
+                    hstate,
+                    hstate_hat, 
+                    _rng,
+                )
+            else:
+                step_state = (
+                    params,
+                    env_state,
+                    init_obs,
+                    init_dones,
+                    hstate,
+                    _rng,
+                )
             step_state, (rewards, dones, infos, viz_env_states) = jax.lax.scan(
                 _greedy_env_step, step_state, None, config["NUM_STEPS"]
             )
