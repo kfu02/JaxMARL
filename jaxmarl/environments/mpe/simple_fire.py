@@ -7,7 +7,6 @@ from jaxmarl.environments.mpe.simple import SimpleMPE, State
 from jaxmarl.environments.mpe.default_params import *
 from gymnax.environments.spaces import Box
 
-
 class SimpleFireMPE(SimpleMPE):
     def __init__(
         self,
@@ -24,8 +23,14 @@ class SimpleFireMPE(SimpleMPE):
         self.capability_aware = capability_aware
         self.num_capabilities = num_capabilities
 
+        # components of the observation
+        pos_dim = num_agents * 2
+        vel_dim = 2 # only ego agent
+        cap_dim = num_agents * num_capabilities
+        fire_pos_dim = num_landmarks * 2
+        fire_rad_dim = num_landmarks
         observation_spaces = {
-            i:Box(-jnp.inf, jnp.inf, (num_agents*(2+2+num_capabilities) + num_landmarks*(2+1),)) 
+            i:Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + cap_dim + fire_pos_dim + fire_rad_dim)) 
             for i in agents
         }
 
@@ -33,6 +38,7 @@ class SimpleFireMPE(SimpleMPE):
 
         # Env specific parameters
         self.test_team = kwargs["test_team"] if "test_team" in kwargs else None
+        self.fire_rad_range = kwargs["fire_rad_range"] if "fire_rad_range" in kwargs else [0.2, 0.3]
         # Parameters
         # NOTE: rad now passed in, necessity for SimpleSpread modifications
         collide = jnp.concatenate(
@@ -56,19 +62,23 @@ class SimpleFireMPE(SimpleMPE):
 
     def get_obs(self, state: State) -> Dict[str, chex.Array]:
         def _obs(aidx: int):
-            ego_pos = state.p_pos[aidx, :]
-            # use jnp.roll to remove ego agent from other_pos and other_vel arrays
-            other_pos = jnp.roll(state.p_pos, shift=self.num_agents - aidx - 1, axis=0)[
-                : self.num_agents - 1
-            ]
-            # transform to relative pos
-            rel_other_pos = other_pos - ego_pos
+            def shift_array(arr, i):
+                """
+                Assuming arr is 2D, moves row i to the front
+                """
+                i = i % arr.shape[0]
+                first_part = arr[i:]
+                second_part = arr[:i]
+                return jnp.concatenate([first_part, second_part])
+
+            # move ego_pos to front of agent_pos, then remove
+            agent_pos = state.p_pos[:self.num_agents, :]
+            other_pos = shift_array(agent_pos, aidx)
+            ego_pos = other_pos[0]
+            other_pos = other_pos[1:]
+            rel_other_pos = other_pos - ego_pos # and transform to relative pos
 
             ego_vel = state.p_vel[aidx, :]
-            # use jnp.roll to remove ego agent from other_vel and other_vel arrays
-            other_vel = jnp.roll(state.p_vel, shift=self.num_agents - aidx - 1, axis=0)[
-                : self.num_agents - 1
-            ]
 
             other_cap = jnp.stack([
                 state.accel.flatten(), state.rad[:self.num_agents].flatten(), # landmark rad is included in state.rad
@@ -91,12 +101,9 @@ class SimpleFireMPE(SimpleMPE):
             landmark_rads = state.rad[self.num_agents:]
 
             obs = jnp.concatenate([
-                # ego agent attributes, then, teammate attr
-                # for each of pos/vel/cap, in same order, in matching order
                 ego_pos.flatten(),  # 2
                 rel_other_pos.flatten(),  # N-1, 2
                 ego_vel.flatten(),  # 2
-                other_vel.flatten(),  # N-1, 2
                 rel_landmark_p_pos.flatten(), # 2, 2
                 landmark_rads.flatten(), # 1, 2
                 # NOTE: caps must go last for hypernet logic
@@ -133,15 +140,10 @@ class SimpleFireMPE(SimpleMPE):
             agents_on_landmark = jax.vmap(_agent_in_range, in_axes=[0, None, None])(self.agent_range, landmark_pos, landmark_rad)
             firefighting_level = jnp.sum(jnp.where(agents_on_landmark, agent_rads, 0))
 
-            # if ff is enough, reward the team, otherwise penalize it
-            # enough_firefight = firefighting_level >= landmark_rads[i]
-            # global_rew = jnp.where(enough_firefight, global_rew + 1, global_rew - 1)
-
             # dense rew for firefighting
             enough_firefight = firefighting_level >= landmark_rads[i]
-            # NOTE: give +1 if enough firefighting, else reward based on how much of fire is covered 
+            # NOTE: reward based on how much of fire is covered, but cap at 0
             # (since !enough_firefight means ff_level < landmark_rads, this second term is always < 0)
-            # (also, fire_rad = 0.1 to 0.4)
             ff_rew = jnp.where(enough_firefight, 1, 2*(firefighting_level-landmark_rads[i]))
 
             # only add reward if this fire is valid (rad > 0)
@@ -176,7 +178,7 @@ class SimpleFireMPE(SimpleMPE):
         key_a, key_l, key_c, key_fr = jax.random.split(key, num=4)
 
         # spawn landmarks (fires) s.t. they don't overlap
-        landmark_rads = jax.random.uniform(key_fr, (self.num_landmarks,), minval=0.10, maxval=0.40)
+        landmark_rads = jax.random.uniform(key_fr, (self.num_landmarks,), minval=self.fire_rad_range[0], maxval=self.fire_rad_range[1])
 
         def _spawn_one_fire(carry, _):
             key_l, existing_fires, fire_index = carry
