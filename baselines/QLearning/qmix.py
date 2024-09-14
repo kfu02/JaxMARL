@@ -440,6 +440,7 @@ class AgentResidualHyperRNN(nn.Module):
     num_agents: int
     use_capability_transformer: bool
     transformer_kwargs: dict
+    embedding_dim: int
 
     @nn.compact
     def __call__(self, hidden, x, train=False):
@@ -451,12 +452,13 @@ class AgentResidualHyperRNN(nn.Module):
         dim_capabilities = self.num_agents * self.num_capabilities
         cap = orig_obs[:, :, -dim_capabilities:]
         obs = orig_obs[:, :, :-dim_capabilities]
+        time_steps, batch_size, obs_dim = obs.shape
 
         # hypernetwork
-        w_1 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=obs_dim*self.embedding_dim, init_scale=self.init_scale)(cap_repr)
-        b_1 = nn.Dense(self.embedding_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(cap_repr)
-        w_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.init_scale)(cap_repr)
-        b_2 = nn.Dense(self.action_dim, kernel_init=orthogonal(self.hypernet_init_scale), bias_init=constant(0.))(cap_repr)
+        w_1 = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=obs_dim*self.embedding_dim, init_scale=self.init_scale)(orig_obs)
+        b_1 = nn.Dense(self.embedding_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(orig_obs)
+        w_2 = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.init_scale)(orig_obs)
+        b_2 = nn.Dense(self.action_dim, kernel_init=orthogonal(self.hypernet_init_scale), bias_init=constant(0.))(orig_obs)
         
         # reshaping
         w_1 = w_1.reshape(time_steps, batch_size, obs_dim, self.embedding_dim)
@@ -683,7 +685,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
             else:
                 if config["AGENT_RESIDUAL"]:
-                    agent = AgentResidualHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
+                    agent = AgentResidualHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], embedding_dim=config["AGENT_HYPERNET_EMBEDDING_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
                 else:
                     agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents, use_capability_transformer=config["AGENT_USE_CAPABILITY_TRANSFORMER"], transformer_kwargs=config["AGENT_TRANSFORMER_KWARGS"])
 

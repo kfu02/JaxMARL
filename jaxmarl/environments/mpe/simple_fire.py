@@ -165,7 +165,7 @@ class SimpleFireMPE(SimpleMPE):
             return -jnp.min(dists)
 
         rew = {
-            a: global_rew + (0.00 * _agent_rew(i))
+            a: global_rew + (0.01 * _agent_rew(i))
             for i, a in enumerate(self.agents)
         }
         return rew
