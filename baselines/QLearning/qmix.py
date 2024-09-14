@@ -122,7 +122,6 @@ class AgentHyperMLP(nn.Module):
         time_steps, batch_size, obs_dim = obs.shape
 
         # hypernetwork
-        # TODO: find the memory efficient version from the original paper
         w_1 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
         b_1 = nn.Dense(self.action_dim, kernel_init=orthogonal(self.hypernet_init_scale), bias_init=constant(0.))(cap_repr)
         # w_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.embedding_dim*self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)

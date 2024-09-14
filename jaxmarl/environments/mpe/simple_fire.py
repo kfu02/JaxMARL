@@ -36,11 +36,16 @@ class SimpleFireMPE(SimpleMPE):
 
         self.colour = [AGENT_COLOUR] * num_agents + [OBS_COLOUR] * num_landmarks
 
-        # Env specific parameters
+        # env specific parameters
         self.test_team = kwargs["test_team"] if "test_team" in kwargs else None
         self.fire_rad_range = kwargs["fire_rad_range"] if "fire_rad_range" in kwargs else [0.2, 0.3]
-        # Parameters
-        # NOTE: rad now passed in, necessity for SimpleSpread modifications
+        
+        # reward shaping
+        self.fire_out_reward = kwargs["fire_out_reward"] if "fire_out_reward" in kwargs else 1
+        self.uncovered_penalty_factor = kwargs["uncovered_penalty_factor"] if "uncovered_penalty_factor" in kwargs else 2
+        self.pos_shaping_factor = kwargs["pos_shaping"] if "pos_shaping" in kwargs else 0.01
+
+        # no collisions in this env
         collide = jnp.concatenate(
             [jnp.full((num_agents+num_landmarks), False)]
         )
@@ -142,16 +147,20 @@ class SimpleFireMPE(SimpleMPE):
 
             # dense rew for firefighting
             enough_firefight = firefighting_level >= landmark_rads[i]
-            # NOTE: reward based on how much of fire is covered, but cap at 0
-            # (since !enough_firefight means ff_level < landmark_rads, this second term is always < 0)
-            ff_rew = jnp.where(enough_firefight, 1, 2*(firefighting_level-landmark_rads[i]))
+            # NOTE: reward based on how much of fire is covered, but add a
+            # ceil() so agents are encouraged to spread out
+            #
+            # (2nd term is <0 since !enough_firefight means ff_level < landmark_rads)
+            ff_rew = jnp.where(enough_firefight, self.fire_out_reward,
+                               self.uncovered_penalty_factor*(firefighting_level-landmark_rads[i]))
 
+            global_rew += ff_rew
             # only add reward if this fire is valid (rad > 0)
-            global_rew = jnp.where(landmark_rad > 0, global_rew+ff_rew, global_rew)
+            # global_rew = jnp.where(landmark_rad > 0, global_rew+ff_rew, global_rew)
 
         # normalize global rew based on how many active fires there are
-        active_fires = jnp.count_nonzero(landmark_rads > 0)
-        global_rew /= active_fires
+        # active_fires = jnp.count_nonzero(landmark_rads > 0)
+        # global_rew /= active_fires
 
         # reward each agent for getting closer to one of the landmarks
         def _dist_to_landmarks(agent_pos):
@@ -161,11 +170,10 @@ class SimpleFireMPE(SimpleMPE):
         def _agent_rew(agent_i):
             agent_pos = state.p_pos[agent_i]
             dists = _dist_to_landmarks(agent_pos)
-            # TODO: set rew to 0 if agent is within landmark rad
             return -jnp.min(dists)
 
         rew = {
-            a: global_rew + (0.01 * _agent_rew(i))
+            a: global_rew + (self.pos_shaping_factor * _agent_rew(i))
             for i, a in enumerate(self.agents)
         }
         return rew

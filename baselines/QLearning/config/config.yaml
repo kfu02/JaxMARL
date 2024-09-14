@@ -1,16 +1,16 @@
 # experiment params
-"NUM_SEEDS": 10
-"SEED": 76
+NUM_SEEDS: 10
+SEED: 76
 
 # wandb params
-"ENTITY": "star-lab-gt"
-"PROJECT": "JaxMARL"
-"WANDB_MODE": "online"
+ENTITY: star-lab-gt
+PROJECT: JaxMARL
+WANDB_MODE: online
 
 # where to save the params (if None, will not save)
-"SAVE_PATH": "baselines/QLearning/checkpoints"
+SAVE_PATH: baselines/QLearning/checkpoints
 
-"VISUALIZE_FINAL_POLICY": True
+VISUALIZE_FINAL_POLICY: True
 # number of seeds/envs to visualize
-"VIZ_NUM_ENVS": 3
-"VIZ_NUM_SEEDS": 5
+VIZ_NUM_ENVS: 3
+VIZ_NUM_SEEDS: 5
