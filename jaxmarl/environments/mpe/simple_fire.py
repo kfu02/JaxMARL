@@ -59,7 +59,7 @@ class SimpleFireMPE(SimpleMPE):
             observation_spaces=observation_spaces,
             dim_c=0, # no comm
             colour=self.colour,
-            # NOTE: rad now passed in, necessity for SimpleSpread modifications
+            # NOTE: modified via reset(), see below
             # rad=rad,
             collide=collide,
             **kwargs,
@@ -121,7 +121,7 @@ class SimpleFireMPE(SimpleMPE):
         obs = {a: _obs(i) for i, a in enumerate(self.agents)}
         return obs
 
-    def rewards(self, state: State, key) -> Dict[str, float]:
+    def rewards(self, state: State) -> Dict[str, float]:
         """
         Goal is to put out fires as quickly as possible.
 

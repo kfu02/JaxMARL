@@ -247,9 +247,7 @@ class SimpleMPE(MultiAgentEnv):
             step=state.step + 1,
         )
 
-        # TODO: this breaks all other envs but is needed for simple_fire...
-        key, key_r = jax.random.split(key)
-        reward = self.rewards(state, key_r)
+        reward = self.rewards(state)
 
         obs = self.get_obs(state)
 
