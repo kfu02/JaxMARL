@@ -873,13 +873,7 @@ def main(config):
         orig_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
         env = SMAXLogWrapper(orig_env)
         # TODO: add test_env to smax
-   # overcooked needs a layout 
-    elif 'overcooked' in env_name.lower():
-        # NOTE: overcooked will not work with current pipeline
-        config['env']["ENV_KWARGS"]["layout"] = overcooked_layouts[config['env']["ENV_KWARGS"]["layout"]]
-        env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
-        env = LogWrapper(env)
-    else:
+    else: # assuming MPE (Overcooked won't work with current pipeline)
         train_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
         log_train_env = LogWrapper(train_env)
         viz_test_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'], test_env_flag=True)
@@ -953,7 +947,7 @@ def main(config):
                         state_seq.append(this_step_state)
 
                     # save visualization to GIF for wandb display
-                    visualizer = MPEVisualizer(viz_test_env, state_seq)
+                    visualizer = MPEVisualizer(viz_test_env, state_seq, env_name=config["env"]["ENV_NAME"])
                     video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
                     visualizer.animate(video_fpath)
                     wandb.log({f"env-{env}-seed-{seed}-rollout": wandb.Video(video_fpath)})

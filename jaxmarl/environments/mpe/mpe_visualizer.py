@@ -11,13 +11,15 @@ class MPEVisualizer(object):
         env,
         state_seq: list,
         reward_seq=None,
+        env_name=None,
     ):
         self.env = env
 
         self.interval = 100
         self.state_seq = state_seq
         self.reward_seq = reward_seq
-        
+
+        self.env_name = env_name
         
         self.comm_active = not np.all(self.env.silent)
         print('Comm active? ', self.comm_active)
@@ -56,22 +58,33 @@ class MPEVisualizer(object):
         
         self.entity_artists = []
         for i in range(self.env.num_agents):
-            # c = Circle(
-            #     state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
-            # )
-            # draw agents as empty circles so they can be seen if they overlap
-            c = Circle(
-                state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
-            )
+            if self.env_name == "MPE_simple_fire":
+                # in FireEnv, draw agents as empty circles so they can be seen if they overlap
+                c = Circle(
+                    state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
+                )
+            else:
+                # otherwise default to filled circles
+                c = Circle(
+                    state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
+                )
 
             self.ax.add_patch(c)
             self.entity_artists.append(c)
 
         for j in range(self.env.num_landmarks):
-            i = j + self.env.num_agents
-            c = Circle(
-                state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
-            )
+            if self.env_name == "MPE_simple_fire":
+                # in FireEnv, draw agents as empty circles so they can be seen if they overlap
+                i = j + self.env.num_agents
+                c = Circle(
+                    state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
+                )
+            else:
+                # otherwise default to filled circles
+                i = j + self.env.num_agents
+                c = Circle(
+                    state.p_pos[i], state.rad[i], color=np.array(self.env.colour[i]) / 255
+                )
             self.ax.add_patch(c)
             self.entity_artists.append(c)
             

@@ -34,7 +34,8 @@ class SimpleFireMPE(SimpleMPE):
             for i in agents
         }
 
-        self.colour = [AGENT_COLOUR] * num_agents + [OBS_COLOUR] * num_landmarks
+        # agent color, landmark color
+        self.colour = [(115, 243, 115)] * num_agents + [(255, 64, 64)] * num_landmarks
 
         # env specific parameters
         self.test_team = kwargs["test_team"] if "test_team" in kwargs else None

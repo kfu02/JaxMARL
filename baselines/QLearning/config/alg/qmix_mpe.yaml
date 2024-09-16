@@ -2,17 +2,20 @@ NUM_ENVS: 8
 # NOTE: NUM_STEPS now defined by config.env.env_kwargs.max_steps
 BUFFER_SIZE: 5000
 BUFFER_BATCH_SIZE: 32
-TOTAL_TIMESTEPS: 4e6 # 2050000
+TOTAL_TIMESTEPS: 4e2 # 2050000
 
 # agent network params
 PARAMETERS_SHARING: True
 AGENT_HIDDEN_DIM: 32 # width of the RNN hidden dim + surrounding MLP layers
 AGENT_RECURRENT: True
 AGENT_INIT_SCALE: 2.
-AGENT_HYPERAWARE: True # False
+AGENT_HYPERAWARE: True
 AGENT_HYPERNET_HIDDEN_DIM: 16 # width of hypernet
 # AGENT_HYPERNET_EMBEDDING_DIM: 32 # only applies if AGENT_HYPERAWARE=True and for AgentHyperMLP
 AGENT_HYPERNET_INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
+
+# NOTE: only used for mpe_tag_pretrained, as that pretrained model requires a 64-wide RNN
+PRETRAINED_HIDDEN_DIM: 64 # width of the RNN hidden dim + surrounding MLP layers
 
 EPSILON_START: 1.0
 EPSILON_FINISH: 0.05
