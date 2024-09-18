@@ -95,7 +95,7 @@ class SimpleFireMPE(SimpleMPE):
             # roll to remove ego agent
             other_cap = jnp.roll(other_cap, shift=self.num_agents - aidx - 1, axis=0)[:self.num_agents-1, :]
 
-            # zero-out capabilities for non-capability-aware baselines
+            # mask out capabilities for non-capability-aware baselines
             if not self.capability_aware:
                 other_cap = jnp.full(other_cap.shape, -1e3)
                 ego_cap = jnp.full(ego_cap.shape, -1e3)

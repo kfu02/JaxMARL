@@ -243,7 +243,7 @@ class CTRolloutManager(JaxMARLWrapper):
             self.action_spaces = {agent:env.action_space() for agent in self.agents}
         
         # batched action sampling
-        self.batch_samplers = {agent: jax.jit(jax.vmap(self.action_space(agent).sample, in_axes=0)) for agent in self.agents}
+        self.batch_samplers = {agent: jax.jit(jax.vmap(self.action_space(agent).sample, in_axes=0)) for agent in self.training_agents}
 
         # assumes the observations are flattened vectors
         self.max_obs_length = max(list(map(lambda x: get_space_dim(x), self.observation_spaces.values())))
@@ -286,7 +286,13 @@ class CTRolloutManager(JaxMARLWrapper):
         else:
             obs = obs_
         obs["__all__"] = self.global_state(obs_, state)
-        return obs, state
+
+        # filter out non-training agents
+        filtered_obs = {}
+        for agent in self.training_agents+["__all__"]:
+            filtered_obs[agent] = obs[agent]
+
+        return filtered_obs, state
 
     @partial(jax.jit, static_argnums=0)
     def wrapped_step(self, key, state, actions):
@@ -300,11 +306,21 @@ class CTRolloutManager(JaxMARLWrapper):
             obs = obs_
         obs["__all__"] = self.global_state(obs_, state)
         reward["__all__"] = self.global_reward(reward)
-        return obs, state, reward, done, infos
+
+        # filter out non-training agents
+        filtered_obs = {}
+        filtered_reward = {}
+        filtered_done = {}
+        for agent in self.training_agents+["__all__"]:
+            filtered_obs[agent] = obs[agent]
+            filtered_reward[agent] = reward[agent]
+            filtered_done[agent] = done[agent]
+
+        return filtered_obs, state, filtered_reward, filtered_done, infos
 
     @partial(jax.jit, static_argnums=0)
     def global_state(self, obs, state):
-        return jnp.concatenate([obs[agent] for agent in self.agents], axis=-1)
+        return jnp.concatenate([obs[agent] for agent in self.training_agents], axis=-1)
     
     @partial(jax.jit, static_argnums=0)
     def global_reward(self, reward):

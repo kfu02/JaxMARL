@@ -4,7 +4,7 @@ import chex
 from typing import Tuple, Dict
 from functools import partial
 from jaxmarl.environments.mpe.simple import State, SimpleMPE
-from gymnax.environments.spaces import Box
+from gymnax.environments.spaces import Box, Discrete
 from jaxmarl.environments.mpe.default_params import *
 
 
@@ -23,14 +23,20 @@ class SimpleFacmacMPE(SimpleMPE):
         num_landmarks=2,
         view_radius=1.5,  # set -1 to deactivate
         score_function="min",
+        capability_aware=True,
+        num_capabilities=2,
         **kwargs,
     ):
         dim_c = 2  # NOTE follows code rather than docs
         action_type = DISCRETE_ACT # CONTINUOUS_ACT
         view_radius = view_radius if view_radius != -1 else 999999
 
+        self.capability_aware = capability_aware
+        self.num_capabilities = num_capabilities
+
         num_agents = num_good_agents + num_adversaries
-        num_entities = num_agents + num_landmarks
+        self.num_landmarks = num_landmarks
+        num_entities = num_agents + self.num_landmarks
 
         self.num_good_agents, self.num_adversaries = num_good_agents, num_adversaries
 
@@ -41,30 +47,18 @@ class SimpleFacmacMPE(SimpleMPE):
         landmarks = ["landmark {}".format(i) for i in range(num_landmarks)]
 
         colour = (
-            [ADVERSARY_COLOUR] * num_adversaries
-            + [AGENT_COLOUR] * num_good_agents
-            + [OBS_COLOUR] * num_landmarks
+            [(255, 155, 155)] * num_adversaries # predator color
+            + [(115, 255, 115)] * num_good_agents # prey color
+            + [(155, 155, 155)] * num_landmarks # obstacle color
         )
 
         # Parameters
-        rad = jnp.concatenate(
-            [
-                jnp.full((self.num_adversaries), 0.075),
-                jnp.full((self.num_good_agents), 0.05),
-                jnp.full((num_landmarks), 0.2),
-            ]
-        )
-        accel = jnp.concatenate(
-            [
-                jnp.full((self.num_adversaries), 3.0),
-                jnp.full((self.num_good_agents), 4.0),
-            ]
-        )
+        # TODO: make max_speed a cap too? would require modifying simple.py, and here (as done with agent_accel/rad)
         max_speed = jnp.concatenate(
             [
                 jnp.full((self.num_adversaries), 1.0),
                 jnp.full((self.num_good_agents), 1.3),
-                jnp.full((num_landmarks), 0.0),
+                jnp.full((self.num_landmarks), 0.0),
             ]
         )
         collide = jnp.full((num_entities,), True)
@@ -77,17 +71,19 @@ class SimpleFacmacMPE(SimpleMPE):
             action_type=action_type,
             dim_c=dim_c,
             colour=colour,
-            rad=rad,
-            accel=accel,
+            # NOTE: modified via reset(), see below
+            # rad=rad,
+            # accel=accel,
             max_speed=max_speed,
             collide=collide,
+            **kwargs,
         )
 
-        # Overwrite action and observation spaces
+        # Overwrite action and observation spaces (by default, will include the prey which is heuristically controlled)
         self.observation_spaces = {
             i: Box(-jnp.inf, jnp.inf, (16,)) for i in self.adversaries
         }
-        self.action_spaces = {i: Box(0.0, 1.0, (5,)) for i in self.adversaries}
+        self.action_spaces = {i: Discrete(5) for i in self.adversaries}
 
         # Introduce partial observability by limiting the agents' view radii
         self.view_radius = jnp.concatenate(
@@ -114,11 +110,13 @@ class SimpleFacmacMPE(SimpleMPE):
         )  # [agent, adversary, collison]
 
         def _good(aidx: int, collisions: chex.Array):
-            rew = -10 * jnp.sum(collisions[aidx])
-
-            mr = jnp.sum(self.map_bounds_reward(jnp.abs(state.p_pos[aidx])))
-            rew -= mr
-            return rew
+            # in the original SimpleTag, the prey is also controlled by a policy, but here since it's a heuristic, return 0
+            return 0
+            # rew = -10 * jnp.sum(collisions[aidx])
+            #
+            # mr = jnp.sum(self.map_bounds_reward(jnp.abs(state.p_pos[aidx])))
+            # rew -= mr
+            # return rew
 
         ad_rew = 10 * jnp.sum(c)
 
@@ -134,6 +132,8 @@ class SimpleFacmacMPE(SimpleMPE):
     def _prey_policy(self, key: chex.PRNGKey, state: State, aidx: int):
         """
         greedily move to the corner furthest from the closest predator at all steps
+
+        returns an int, like policies would
         """
         # world bounds are -1/+1
         corners = jnp.array([[-0.9, -0.9], [0.9, 0.9], [0.9, -0.9], [0.9, 0.9]])
@@ -156,21 +156,16 @@ class SimpleFacmacMPE(SimpleMPE):
         action_vectors = jnp.array([[0,0], [-1,0], [+1,0], [0,-1], [0,+1]])
         action_vectors *= state.accel[aidx]
         dot = jnp.dot(action_vectors, dir_to_corner)
-        best_action = action_vectors[jnp.argmax(dot)]
-
-        # TODO: add obs collision check?
-        # jax.debug.print("aidx {} best corner {} ego_pos {} best_action {}", aidx, best_corner, state.p_pos[aidx], best_action)
-
+        best_action = jnp.argmax(dot)
         return best_action
 
     @partial(jax.jit, static_argnums=[0])
     def step_env(self, key: chex.PRNGKey, state: State, actions: dict):
-        u, c = self.set_actions(state, actions)
-        # we throw away num_good_agents now, as num_agents does not differentiate between active and passive agents
-        u = u[:-self.num_good_agents]
+        # add prey actions manually (actions from policies only control adversaries, but MPE expects actions for all agents)
         for i in range(self.num_good_agents):
-            prey_action = self._prey_policy(key, state, self.num_adversaries+i) # num_adversaries come first in p_pos/accel
-            u = jnp.concatenate([u, prey_action[None]], axis=0)
+            actions[f"agent_{i}"] = self._prey_policy(key, state, self.num_adversaries+i) # num_adversaries come first in p_pos/accel
+        u, c = self.set_actions(state, actions)
+
         if (
             c.shape[1] < self.dim_c
         ):  # This is due to the MPE code carrying around 0s for the communication channels, and due to added prey
@@ -250,6 +245,7 @@ class SimpleFacmacMPE(SimpleMPE):
                 ]
             )
 
+        # TODO: add cap to obs
         def _adversary(aidx):
             return jnp.concatenate(
                 [
@@ -321,6 +317,68 @@ class SimpleFacmacMPE(SimpleMPE):
             {a: _good(i + self.num_adversaries) for i, a in enumerate(self.good_agents)}
         )
         return obs
+
+    @partial(jax.jit, static_argnums=[0])
+    def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, State]:
+        """Overriding superclass simple.py"""
+        # NOTE: copy-pasted from simple.py, bad practice
+
+        key_a, key_l, key_c = jax.random.split(key, num=3)
+
+        p_pos = jnp.concatenate(
+            [
+                jax.random.uniform(
+                    key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
+                ),
+                jax.random.uniform(
+                    key_l, (self.num_landmarks, 2), minval=-1.0, maxval=+1.0
+                ),
+            ]
+        )
+
+        # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
+        selected_agents = jax.random.choice(key_c, self.agent_range, shape=(self.num_agents,), replace=False)
+
+        # unless a test distribution is provided and this is a test_env
+        # TODO: fix test time capabilities (see simple_fire)
+        # if self.test_env_flag and self.test_capabilities is not None:
+        #     team_capabilities = jnp.asarray(self.test_capabilities)
+
+        agent_rads = self.agent_rads[selected_agents]
+        agent_accels = self.agent_accels[selected_agents]
+
+        rad = jnp.concatenate(
+            [
+                # "adversaries" = predators (controlled by our policy)
+                # jnp.full((self.num_adversaries), 0.075),
+                agent_rads,
+                # "good agents" = prey (controlled by pretrained policy)
+                jnp.full((self.num_good_agents), 0.05),
+                jnp.full((self.num_landmarks), 0.2),
+            ]
+        )
+
+        accel = jnp.concatenate(
+            [
+                # "adversaries" = predators (controlled by our policy)
+                # jnp.full((self.num_adversaries), 3.0),
+                agent_accels,
+                # "good agents" = prey (controlled by pretrained policy)
+                jnp.full((self.num_good_agents), 4.0),
+            ]
+        )
+
+        state = State(
+            p_pos=p_pos,
+            p_vel=jnp.zeros((self.num_entities, self.dim_p)),
+            c=jnp.zeros((self.num_agents, self.dim_c)),
+            accel=accel,
+            rad=rad,
+            done=jnp.full((self.num_agents), False),
+            step=0,
+        )
+
+        return self.get_obs(state), state
 
 if __name__ == "__main__":
     env = SimpleFacmacMPE(0)
