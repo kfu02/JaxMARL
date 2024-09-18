@@ -106,7 +106,7 @@ class SimpleTagMPE(SimpleMPE):
 
         landmark_pos, other_pos, other_vel = _common_stats(self.agent_range)
 
-        def _good(aidx):
+        def _good(aidx): # prey
             return jnp.concatenate(
                 [
                     state.p_vel[aidx].flatten(),  # 2
@@ -116,7 +116,21 @@ class SimpleTagMPE(SimpleMPE):
                 ]
             )
 
-        def _adversary(aidx):
+
+        def _adversary(aidx): # predator
+            other_cap = jnp.stack([
+                state.accel[:self.num_adversaries].flatten(), state.rad[:self.num_adversaries].flatten(), # landmark rad is included in state.rad
+            ], axis=-1)
+
+            ego_cap = other_cap[aidx, :]
+            # roll to remove ego agent
+            other_cap = jnp.roll(other_cap, shift=self.num_adversaries - aidx - 1, axis=0)[:self.num_adversaries-1, :]
+
+            # mask out capabilities for non-capability-aware baselines
+            if not self.capability_aware:
+                other_cap = jnp.full(other_cap.shape, -1e3)
+                ego_cap = jnp.full(ego_cap.shape, -1e3)
+
             return jnp.concatenate(
                 [
                     state.p_vel[aidx].flatten(),  # 2
@@ -124,6 +138,9 @@ class SimpleTagMPE(SimpleMPE):
                     landmark_pos[aidx].flatten(),  # 5, 2
                     other_pos[aidx].flatten(),  # 5, 2
                     other_vel[aidx, -1:].flatten(),  # 2
+                    # NOTE: caps must go last for hypernet logic
+                    ego_cap.flatten(),  # n_cap
+                    other_cap.flatten(),  # N-1, n_cap
                 ]
             )
 

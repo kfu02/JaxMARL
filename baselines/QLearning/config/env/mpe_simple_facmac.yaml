@@ -2,9 +2,9 @@ ENV_NAME: MPE_simple_facmac_v1
 ENV_KWARGS:
   max_steps: 50
 
-  # capabilities implemented in MPE_facmac_tag: [predator_rad, predator_accel, predator_max_speed]
+  # capabilities implemented in MPE_facmac_tag: [predator_rad, predator_accel] # TODO: add max_speed?
   capability_aware: True # T/F
-  num_capabilities: 3
+  num_capabilities: 2
   num_adversaries: 3
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter

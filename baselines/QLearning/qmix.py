@@ -96,6 +96,7 @@ class AgentMLP(nn.Module):
         # this is just to keep the training loop code consistent
         return hidden, q_vals 
 
+# TODO: deprecate?
 class AgentHyperMLP(nn.Module):
     # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
     action_dim: int
@@ -199,8 +200,7 @@ class AgentHyperRNN(nn.Module):
     init_scale: float
     hypernet_dim: int
     hypernet_init_scale: int
-    num_capabilities: int # per agent
-    num_agents: int
+    dim_capabilities: int # per team
 
     @nn.compact
     def __call__(self, hidden, x, train=True):
@@ -209,12 +209,11 @@ class AgentHyperRNN(nn.Module):
         # separate obs into capabilities and observations
         # (env gives obs = orig obs+cap)
         # NOTE: this is hardcoded to match simple_spread's computation
-        dim_capabilities = self.num_agents * self.num_capabilities
-        cap = orig_obs[:, :, -dim_capabilities:]
-        obs = orig_obs[:, :, :-dim_capabilities]
+        cap = orig_obs[:, :, -self.dim_capabilities:]
+        obs = orig_obs[:, :, :-self.dim_capabilities]
 
         time_steps, batch_size, obs_dim = obs.shape
-        # jax.debug.print("cap {} obs {}", cap, obs)
+        jax.debug.print("cap {} obs {}", cap, obs)
 
         # encoder
         # original
@@ -407,7 +406,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             if not config["AGENT_HYPERAWARE"]:
                 agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
             else:
-                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], num_capabilities=log_train_env.num_capabilities, num_agents=log_train_env.num_agents)
+                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], dim_capabilities=log_train_env.dim_capabilities)
 
         rng, _rng = jax.random.split(rng)
 

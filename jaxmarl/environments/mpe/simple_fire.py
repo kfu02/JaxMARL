@@ -22,15 +22,15 @@ class SimpleFireMPE(SimpleMPE):
 
         self.capability_aware = capability_aware
         self.num_capabilities = num_capabilities
+        self.dim_capabilities = num_agents * num_capabilities
 
         # components of the observation
         pos_dim = num_agents * 2
         vel_dim = 2 # only ego agent
-        cap_dim = num_agents * num_capabilities
         fire_pos_dim = num_landmarks * 2
         fire_rad_dim = num_landmarks
         observation_spaces = {
-            i:Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + cap_dim + fire_pos_dim + fire_rad_dim)) 
+            i:Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + self.dim_capabilities + fire_pos_dim + fire_rad_dim)) 
             for i in agents
         }
 

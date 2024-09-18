@@ -33,6 +33,7 @@ class SimpleFacmacMPE(SimpleMPE):
 
         self.capability_aware = capability_aware
         self.num_capabilities = num_capabilities
+        self.dim_capabilities = num_adversaries * num_capabilities
 
         num_agents = num_good_agents + num_adversaries
         self.num_landmarks = num_landmarks
@@ -81,7 +82,7 @@ class SimpleFacmacMPE(SimpleMPE):
 
         # Overwrite action and observation spaces (by default, will include the prey which is heuristically controlled)
         self.observation_spaces = {
-            i: Box(-jnp.inf, jnp.inf, (16,)) for i in self.adversaries
+            i: Box(-jnp.inf, jnp.inf, (16+self.dim_capabilities,)) for i in self.adversaries
         }
         self.action_spaces = {i: Discrete(5) for i in self.adversaries}
 
@@ -234,7 +235,7 @@ class SimpleFacmacMPE(SimpleMPE):
 
         landmark_pos, other_pos, other_vel = _common_stats(self.agent_range)
 
-        def _good(aidx):
+        def _good(aidx): # prey
             return jnp.concatenate(
                 [
                     state.p_vel[aidx].flatten(),  # 2
@@ -246,7 +247,20 @@ class SimpleFacmacMPE(SimpleMPE):
             )
 
         # TODO: add cap to obs
-        def _adversary(aidx):
+        def _adversary(aidx): # predator
+            adversary_cap = jnp.stack([
+                state.accel[:self.num_adversaries].flatten(), state.rad[:self.num_adversaries].flatten(),
+            ], axis=-1)
+
+            ego_cap = adversary_cap[aidx, :]
+            # roll to remove ego agent
+            other_cap = jnp.roll(adversary_cap, shift=self.num_adversaries - aidx - 1, axis=0)[:self.num_adversaries-1, :]
+
+            # mask out capabilities for non-capability-aware baselines
+            if not self.capability_aware:
+                other_cap = jnp.full(other_cap.shape, -1e3)
+                ego_cap = jnp.full(ego_cap.shape, -1e3)
+
             return jnp.concatenate(
                 [
                     state.p_vel[aidx].flatten(),  # 2
@@ -254,6 +268,9 @@ class SimpleFacmacMPE(SimpleMPE):
                     landmark_pos[aidx].flatten(),  # 5, 2
                     other_pos[aidx].flatten(),  # 5, 2
                     other_vel[aidx, -1:].flatten(),  # 2
+                    # NOTE: caps must go last for hypernet logic
+                    ego_cap.flatten(),  # n_cap
+                    other_cap.flatten(),  # N-1, n_cap
                 ]
             )
 
