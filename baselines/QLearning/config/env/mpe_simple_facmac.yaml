@@ -9,12 +9,13 @@ ENV_KWARGS:
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
   # default: 0.075
-  # agent_rads: [0.075, 0.075, 0.075, 0.075, 0.075]
-  agent_rads: [0.055, 0.065, 0.075]
+  agent_rads: [0.055, 0.065, 0.075, 0.085, 0.095]
   # default: 3.0
-  agent_accels: [4.0, 3.0, 2.0]
+  agent_accels: [4.0, 3.5, 3.0, 2.5, 2.0]
+  # TODO: add max_speed?
 
-  # test_team:
-  #   agent_rads: [0.4, 0.15, 0.08]
-  #   agent_accels: [0.75, 3, 4]
+  test_team:
+    agent_rads: [0.045, 0.075, 0.105]
+    agent_accels: [4.5, 3.0, 1.5]
+    # TODO: add max_speed?
 

@@ -53,6 +53,8 @@ class SimpleFacmacMPE(SimpleMPE):
             + [(155, 155, 155)] * num_landmarks # obstacle color
         )
 
+        self.test_team = kwargs["test_team"] if "test_team" in kwargs else None
+
         # Parameters
         # TODO: make max_speed a cap too? would require modifying simple.py, and here (as done with agent_accel/rad)
         max_speed = jnp.concatenate(
@@ -246,7 +248,6 @@ class SimpleFacmacMPE(SimpleMPE):
                 ]
             )
 
-        # TODO: add cap to obs
         def _adversary(aidx): # predator
             adversary_cap = jnp.stack([
                 state.accel[:self.num_adversaries].flatten(), state.rad[:self.num_adversaries].flatten(),
@@ -355,14 +356,14 @@ class SimpleFacmacMPE(SimpleMPE):
 
         # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
         selected_agents = jax.random.choice(key_c, self.agent_range, shape=(self.num_agents,), replace=False)
-
-        # unless a test distribution is provided and this is a test_env
-        # TODO: fix test time capabilities (see simple_fire)
-        # if self.test_env_flag and self.test_capabilities is not None:
-        #     team_capabilities = jnp.asarray(self.test_capabilities)
-
         agent_rads = self.agent_rads[selected_agents]
         agent_accels = self.agent_accels[selected_agents]
+
+        # unless a test distribution is provided and this is a test_env
+        if self.test_env_flag and self.test_team is not None:
+            agent_rads = jnp.array(self.test_team["agent_rads"])
+            agent_accels = jnp.array(self.test_team["agent_accels"])
+
 
         rad = jnp.concatenate(
             [

@@ -261,7 +261,6 @@ class SimpleFireMPE(SimpleMPE):
 
         # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
         selected_agents = jax.random.choice(key_c, self.num_agents, shape=(self.num_agents,), replace=False)
-
         agent_rads = self.agent_rads[selected_agents]
         agent_accels = self.agent_accels[selected_agents]
 

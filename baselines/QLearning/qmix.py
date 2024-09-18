@@ -213,7 +213,6 @@ class AgentHyperRNN(nn.Module):
         obs = orig_obs[:, :, :-self.dim_capabilities]
 
         time_steps, batch_size, obs_dim = obs.shape
-        jax.debug.print("cap {} obs {}", cap, obs)
 
         # encoder
         # original
