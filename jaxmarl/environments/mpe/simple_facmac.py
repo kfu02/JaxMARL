@@ -22,10 +22,11 @@ class SimpleFacmacMPE(SimpleMPE):
         num_adversaries=3,
         num_landmarks=2,
         view_radius=1.5,  # set -1 to deactivate
-        score_function="sum"
+        score_function="min",
+        **kwargs,
     ):
         dim_c = 2  # NOTE follows code rather than docs
-        action_type = CONTINUOUS_ACT
+        action_type = DISCRETE_ACT # CONTINUOUS_ACT
         view_radius = view_radius if view_radius != -1 else 999999
 
         num_agents = num_good_agents + num_adversaries
@@ -131,60 +132,44 @@ class SimpleFacmacMPE(SimpleMPE):
         return rew
 
     def _prey_policy(self, key: chex.PRNGKey, state: State, aidx: int):
-        action = None
-        n = 100  # number of positions sampled
-        # sample actions randomly from a target circle
-        # length = jnp.sqrt(jnp.random.uniform(0, 1, n))
-        # angle = jnp.pi * jnp.random.uniform(0, 2, n)
+        """
+        greedily move to the corner furthest from the closest predator at all steps
+        """
+        # world bounds are -1/+1
+        corners = jnp.array([[-0.9, -0.9], [0.9, 0.9], [0.9, -0.9], [0.9, 0.9]])
 
-        key, _key = jax.random.split(key)
-        length = jnp.sqrt(jax.random.uniform(_key, (n,), minval=0., maxval=1.))
-        key, _key = jax.random.split(key)
-        angle = jnp.pi * jnp.sqrt(jax.random.uniform(_key, (n,), minval=0., maxval=2.))
-        x = length * jnp.cos(angle)
-        y = length * jnp.sin(angle)
+        # compute dists of all corners to all adversaries
+        # here, dist[i, j] = dist(adversary_i, corner_j)
+        adv_pos = state.p_pos[:self.num_adversaries]
+        delta_pos = corners[None, :, :] - adv_pos[:, None, :]
+        dist = jnp.sqrt(jnp.sum(jnp.square(delta_pos), axis=2))
 
-        # evaluate score for each position
-        # check whether positions are reachable
-        # sample a few evenly spaced points on the way and see if they collide with anything
-        scores = jnp.zeros(n, dtype=jnp.float32)
-        n_iter = 5
-        if self.score_function == "sum":
-            for i in range(n_iter):
-                waypoints_length = (length / float(n_iter)) * (i + 1)
-                x_wp = waypoints_length * jnp.cos(angle)
-                y_wp = waypoints_length * jnp.sin(angle)
-                proj_pos = jnp.vstack((x_wp, y_wp)).transpose() + state.p_pos[aidx]
-                delta_pos = state.p_pos[None, :, :] - proj_pos[:, None, :]
-                dist = jnp.sqrt(jnp.sum(jnp.square(delta_pos), axis=2))
-                dist_min = self.rad + self.rad[aidx]
-                scores = jnp.where((dist < dist_min[None]).sum(axis=1), scores, -9999999)
-                if i == n_iter - 1:
-                    scores += dist[:, :self.num_adversaries].sum(axis=1)
-        elif self.score_function == "min":
-            proj_pos = jnp.vstack((x, y)).transpose() + state.p_pos[aidx]
-            rel_dis = jnp.sqrt(jnp.sum(jnp.square(state.p_pos[aidx] - state.p_pos[:self.num_adversaries])))
-            min_dist_adv_idx = jnp.argmin(rel_dis)
-            delta_pos = state.p_pos[:self.num_adversaries][None, :, :] - proj_pos[:, None, :]
-            dist = jnp.sqrt(jnp.sum(jnp.square(delta_pos), axis=2))
-            dist_min = self.rad[:self.num_adversaries] + self.rad[aidx]
-            scores = jnp.where((dist < dist_min[None]).sum(axis=1), scores, -9999999)
-            scores += dist[:, min_dist_adv_idx]
-        else:
-            raise Exception("Unknown score function {}".format(self.score_function))
-        # move to best position
-        best_idx = jnp.argmax(scores)
-        chosen_action = jnp.array([x[best_idx], y[best_idx]], dtype=jnp.float32)
-        chosen_action = jax.lax.cond(scores[best_idx] < 0, lambda: chosen_action*0.0, lambda: chosen_action)
-        return chosen_action
+        # find the corner with the furthest closest adversary
+        # axis=0 reduces over adversaries dim
+        closest_adv_each_corner = jnp.min(dist, axis=0)
+        best_corner = corners[jnp.argmax(closest_adv_each_corner)]
+
+        # pick the discrete action which moves towards best corner
+        dir_to_corner = best_corner - state.p_pos[aidx]
+        dir_to_corner /= jnp.linalg.norm(dir_to_corner)
+
+        action_vectors = jnp.array([[0,0], [-1,0], [+1,0], [0,-1], [0,+1]])
+        action_vectors *= state.accel[aidx]
+        dot = jnp.dot(action_vectors, dir_to_corner)
+        best_action = action_vectors[jnp.argmax(dot)]
+
+        # TODO: add obs collision check?
+        # jax.debug.print("aidx {} best corner {} ego_pos {} best_action {}", aidx, best_corner, state.p_pos[aidx], best_action)
+
+        return best_action
 
     @partial(jax.jit, static_argnums=[0])
     def step_env(self, key: chex.PRNGKey, state: State, actions: dict):
-        u, c = self.set_actions(actions)
+        u, c = self.set_actions(state, actions)
         # we throw away num_good_agents now, as num_agents does not differentiate between active and passive agents
         u = u[:-self.num_good_agents]
         for i in range(self.num_good_agents):
-            prey_action = self._prey_policy(key, state, u.shape[0]-1+i)
+            prey_action = self._prey_policy(key, state, self.num_adversaries+i) # num_adversaries come first in p_pos/accel
             u = jnp.concatenate([u, prey_action[None]], axis=0)
         if (
             c.shape[1] < self.dim_c
