@@ -15,18 +15,12 @@ class SimpleTagMPE(SimpleMPE):
         num_adversaries=3,
         num_obs=2,
         action_type=DISCRETE_ACT,
-        capability_aware=True,
-        num_capabilities=2,
-        **kwargs,
     ):
         dim_c = 2  # NOTE follows code rather than docs
 
-        self.capability_aware = capability_aware
-        self.num_capabilities = num_capabilities
-
         num_agents = num_good_agents + num_adversaries
-        self.num_landmarks = num_obs
-        num_entities = num_agents + self.num_landmarks
+        num_landmarks = num_obs
+        num_entities = num_agents + num_landmarks
 
         self.num_good_agents, self.num_adversaries = num_good_agents, num_adversaries
 
@@ -45,18 +39,30 @@ class SimpleTagMPE(SimpleMPE):
         )
 
         colour = (
-            [(255, 155, 155)] * num_adversaries # predator color
-            + [(115, 255, 115)] * num_good_agents # prey color
-            + [(155, 155, 155)] * num_obs # obstacle color
+            [ADVERSARY_COLOUR] * num_adversaries
+            + [AGENT_COLOUR] * num_good_agents
+            + [OBS_COLOUR] * num_obs
         )
 
         # Parameters
-        # TODO: make max_speed a cap too? would require modifying simplespread, and here (as done with agent_accel/rad)
+        rad = jnp.concatenate(
+            [
+                jnp.full((self.num_adversaries), 0.075),
+                jnp.full((self.num_good_agents), 0.05),
+                jnp.full((num_landmarks), 0.2),
+            ]
+        )
+        accel = jnp.concatenate(
+            [
+                jnp.full((self.num_adversaries), 3.0),
+                jnp.full((self.num_good_agents), 4.0),
+            ]
+        )
         max_speed = jnp.concatenate(
             [
                 jnp.full((self.num_adversaries), 1.0),
                 jnp.full((self.num_good_agents), 1.3),
-                jnp.full((self.num_landmarks), 0.0),
+                jnp.full((num_landmarks), 0.0),
             ]
         )
         collide = jnp.full((num_entities,), True)
@@ -64,18 +70,16 @@ class SimpleTagMPE(SimpleMPE):
         super().__init__(
             num_agents=num_agents,
             agents=agents,
-            num_landmarks=self.num_landmarks,
+            num_landmarks=num_landmarks,
             landmarks=landmarks,
             action_type=action_type,
             observation_spaces=observation_spaces,
             dim_c=dim_c,
             colour=colour,
-            # NOTE: modified via reset(), see below
-            # rad=rad,
-            # accel=accel,
+            rad=rad,
+            accel=accel,
             max_speed=max_speed,
             collide=collide,
-            **kwargs,
         )
 
     def get_obs(self, state: State) -> Dict[str, chex.Array]:
@@ -106,7 +110,7 @@ class SimpleTagMPE(SimpleMPE):
 
         landmark_pos, other_pos, other_vel = _common_stats(self.agent_range)
 
-        def _good(aidx): # prey
+        def _good(aidx):
             return jnp.concatenate(
                 [
                     state.p_vel[aidx].flatten(),  # 2
@@ -116,21 +120,7 @@ class SimpleTagMPE(SimpleMPE):
                 ]
             )
 
-
-        def _adversary(aidx): # predator
-            other_cap = jnp.stack([
-                state.accel[:self.num_adversaries].flatten(), state.rad[:self.num_adversaries].flatten(), # landmark rad is included in state.rad
-            ], axis=-1)
-
-            ego_cap = other_cap[aidx, :]
-            # roll to remove ego agent
-            other_cap = jnp.roll(other_cap, shift=self.num_adversaries - aidx - 1, axis=0)[:self.num_adversaries-1, :]
-
-            # mask out capabilities for non-capability-aware baselines
-            if not self.capability_aware:
-                other_cap = jnp.full(other_cap.shape, -1e3)
-                ego_cap = jnp.full(ego_cap.shape, -1e3)
-
+        def _adversary(aidx):
             return jnp.concatenate(
                 [
                     state.p_vel[aidx].flatten(),  # 2
@@ -138,9 +128,6 @@ class SimpleTagMPE(SimpleMPE):
                     landmark_pos[aidx].flatten(),  # 5, 2
                     other_pos[aidx].flatten(),  # 5, 2
                     other_vel[aidx, -1:].flatten(),  # 2
-                    # NOTE: caps must go last for hypernet logic
-                    ego_cap.flatten(),  # n_cap
-                    other_cap.flatten(),  # N-1, n_cap
                 ]
             )
 
@@ -181,65 +168,3 @@ class SimpleTagMPE(SimpleMPE):
             }
         )
         return rew
-
-    @partial(jax.jit, static_argnums=[0])
-    def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, State]:
-        """Overriding superclass simple.py"""
-        # NOTE: copy-pasted from simple.py, bad practice
-
-        key_a, key_l, key_c = jax.random.split(key, num=3)
-
-        p_pos = jnp.concatenate(
-            [
-                jax.random.uniform(
-                    key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
-                ),
-                jax.random.uniform(
-                    key_l, (self.num_landmarks, 2), minval=-1.0, maxval=+1.0
-                ),
-            ]
-        )
-
-        # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
-        selected_agents = jax.random.choice(key_c, self.agent_range, shape=(self.num_agents,), replace=False)
-
-        # unless a test distribution is provided and this is a test_env
-        # TODO: fix test time capabilities (see simple_fire)
-        # if self.test_env_flag and self.test_capabilities is not None:
-        #     team_capabilities = jnp.asarray(self.test_capabilities)
-
-        agent_rads = self.agent_rads[selected_agents]
-        agent_accels = self.agent_accels[selected_agents]
-
-        rad = jnp.concatenate(
-            [
-                # "adversaries" = predators (controlled by our policy)
-                # jnp.full((self.num_adversaries), 0.075),
-                agent_rads,
-                # "good agents" = prey (controlled by pretrained policy)
-                jnp.full((self.num_good_agents), 0.05),
-                jnp.full((self.num_landmarks), 0.2),
-            ]
-        )
-
-        accel = jnp.concatenate(
-            [
-                # "adversaries" = predators (controlled by our policy)
-                # jnp.full((self.num_adversaries), 3.0),
-                agent_accels,
-                # "good agents" = prey (controlled by pretrained policy)
-                jnp.full((self.num_good_agents), 4.0),
-            ]
-        )
-
-        state = State(
-            p_pos=p_pos,
-            p_vel=jnp.zeros((self.num_entities, self.dim_p)),
-            c=jnp.zeros((self.num_agents, self.dim_c)),
-            accel=accel,
-            rad=rad,
-            done=jnp.full((self.num_agents), False),
-            step=0,
-        )
-
-        return self.get_obs(state), state

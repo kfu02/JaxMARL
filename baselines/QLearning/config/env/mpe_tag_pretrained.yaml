@@ -1,12 +1,5 @@
 # you can use this configuration with qmix_pretrained to train a team of predators againts a pretrained iql pray
-ENV_NAME: MPE_simple_tag_v3
-PRETRAINED_FILE: baselines/QLearning/checkpoints/MPE_simple_tag_v3/iql_ps.safetensors
-PRETRAINED_AGENTS: [agent_0] # in simple tag, agents names are ['adversary_0', 'adversary_1', 'adversary_2', 'agent_0'] and agent_0 is the pray
-ENV_KWARGS:
-  capability_aware: False
-
-  # default: 0.075
-  # agent_rads: [0.075, 0.075, 0.075, 0.075, 0.075]
-  agent_rads: [0.055, 0.065, 0.075]
-  # default: 3.0
-  agent_accels: [4.0, 3.0, 2.0]
+"ENV_NAME": "MPE_simple_tag_v3"
+"PRETRAINED_FILE": "baselines/QLearning/checkpoints/MPE_simple_tag_v3/iql_ps.safetensors"
+"PRETRAINED_AGENTS": ["agent_0"] # in simple tag, agents names are ['adversary_0', 'adversary_1', 'adversary_2', 'agent_0'] and agent_0 is the pray
+"ENV_KWARGS": {}
