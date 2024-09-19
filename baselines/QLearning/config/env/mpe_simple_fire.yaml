@@ -14,9 +14,9 @@ ENV_KWARGS:
   agent_rads: [0.3, 0.2, 0.1, 0.1, 0.2]
   agent_accels: [1, 2, 3, 3, 2]
 
-  test_team:
-    agent_rads: [0.4, 0.15, 0.08]
-    agent_accels: [0.75, 3, 4]
+  # "test_team":
+  #   "agent_rads": [0.4, 0.15, 0.08]
+  #   "agent_accels": [0.75, 3, 4]
 
   # TODO: add rew shaping constants to YAML
   fire_out_reward: 0.5

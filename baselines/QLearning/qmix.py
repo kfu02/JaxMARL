@@ -278,12 +278,13 @@ class AgentHyperGRU(nn.Module):
     hidden_dim: int
     hypernet_dim: int
     init_scale: float
+    hypernet_init_scale: float
     
     @nn.compact
     def __call__(self, hidden, hidden_hat, x, train=True):
         orig_obs, dones = x
         embedding = nn.Dense(self.hypernet_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(orig_obs)
-        hs, embedding = HyperGRU(hidden_dim=self.hidden_dim, hypernet_dim=self.hypernet_dim, init_scale=self.init_scale)((hidden, hidden_hat), (embedding, dones))
+        hs, embedding = HyperGRU(hidden_dim=self.hidden_dim, hypernet_dim=self.hypernet_dim, init_scale=self.hypernet_init_scale)((hidden, hidden_hat), (embedding, dones))
         hidden, hidden_hat = hs
         q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
 
@@ -501,7 +502,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
             if not config["AGENT_HYPERAWARE"]:
                 agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
             else:
-                agent = AgentHyperGRU(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"])
+                agent = AgentHyperGRU(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"])
 
         rng, _rng = jax.random.split(rng)
 
