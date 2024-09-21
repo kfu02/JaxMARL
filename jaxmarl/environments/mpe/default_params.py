@@ -10,6 +10,7 @@ DAMPING = 0.25
 CONTACT_FORCE = 1e2
 CONTACT_MARGIN = 1e-3
 DT = 0.1
+MASK_VAL = 0 # for masking out capability info
 
 # Colours
 AGENT_COLOUR = (115, 243, 115)

@@ -259,8 +259,8 @@ class SimpleFacmacMPE(SimpleMPE):
 
             # mask out capabilities for non-capability-aware baselines
             if not self.capability_aware:
-                other_cap = jnp.full(other_cap.shape, -1e3)
-                ego_cap = jnp.full(ego_cap.shape, -1e3)
+                other_cap = jnp.full(other_cap.shape, MASK_VAL)
+                ego_cap = jnp.full(ego_cap.shape, MASK_VAL)
 
             return jnp.concatenate(
                 [

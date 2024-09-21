@@ -97,8 +97,8 @@ class SimpleFireMPE(SimpleMPE):
 
             # mask out capabilities for non-capability-aware baselines
             if not self.capability_aware:
-                other_cap = jnp.full(other_cap.shape, -1e3)
-                ego_cap = jnp.full(ego_cap.shape, -1e3)
+                other_cap = jnp.full(other_cap.shape, MASK_VAL)
+                ego_cap = jnp.full(ego_cap.shape, MASK_VAL)
 
             # give agents the pos and rad of all landmarks (fires)
             landmark_p_pos = state.p_pos[self.num_agents:]
