@@ -1,5 +1,3 @@
-# TODO: how to transfer policies to RL? save and reload probably easiest
-
 NUM_ENVS: 8
 PARAMETERS_SHARING: True
 
@@ -9,3 +7,12 @@ TRAJECTORIES_PER_ENV: 32
 # TODO: I believe this batch size is actually 32 trajectories, not 32 steps
 BUFFER_BATCH_SIZE: 32
 # TRAIN_ITERS: 1000
+
+# agent network params
+PARAMETERS_SHARING: True
+AGENT_HIDDEN_DIM: 32 # width of the RNN hidden dim + surrounding MLP layers
+AGENT_RECURRENT: True
+AGENT_INIT_SCALE: 2.
+AGENT_HYPERAWARE: True
+AGENT_HYPERNET_HIDDEN_DIM: 16 # width of hypernet
+AGENT_HYPERNET_INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS

@@ -30,7 +30,7 @@ from jaxmarl.wrappers.baselines import LogWrapper, SMAXLogWrapper, CTRolloutMana
 from jaxmarl.environments.mpe import MPEVisualizer
 from jaxmarl.environments.mpe.simple import State
 
-# TODO: make a new shared file to import identical policy architectures from the QMIX.py file
+from jaxmarl.policies import ScannedRNN, AgentMLP, AgentHyperMLP, AgentRNN, AgentHyperRNN, HyperNetwork
 
 import more_itertools as mit
 
@@ -390,16 +390,16 @@ def main(config):
 
     config["alg"]["NUM_STEPS"] = config["alg"].get("NUM_STEPS", train_env.max_steps) # default steps defined by the env
     
-    # hyper_tag = "hyper" if config["alg"]["AGENT_HYPERAWARE"] else "normal"
-    # recurrent_tag = "RNN" if config["alg"]["AGENT_RECURRENT"] else "MLP"
-    # aware_tag = "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware"
+    hyper_tag = "hyper" if config["alg"]["AGENT_HYPERAWARE"] else "normal"
+    recurrent_tag = "RNN" if config["alg"]["AGENT_RECURRENT"] else "MLP"
+    aware_tag = "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware"
 
     wandb_tags = [
         alg_name.upper(),
         env_name,
-        # hyper_tag,
-        # recurrent_tag,
-        # aware_tag,
+        hyper_tag,
+        recurrent_tag,
+        aware_tag,
         f"jax_{jax.__version__}",
     ]
 
@@ -412,7 +412,7 @@ def main(config):
         entity=config["ENTITY"],
         project=config["PROJECT"],
         tags=wandb_tags,
-        # name=f'{hyper_tag} {recurrent_tag} {aware_tag} {cap_transf_tag} / {env_name}',
+        name=f'BC / {hyper_tag} {recurrent_tag} {aware_tag} / {env_name}',
         name=f'{alg_name} / {env_name}',
         config=config,
         mode=config["WANDB_MODE"],
@@ -426,6 +426,10 @@ def main(config):
 
     expert_runner_state = expert_collect_output["runner_state"]
     expert_traj_count, expert_buffers, _, _, _, _ = expert_runner_state
+
+    # TODO: iterate over expert buffers (with lax.scan?) and train policy to imitate demonstrations
+    # see line 337 of qmix.py
+
     jax.debug.print("expert traj count {}", expert_traj_count)
     expert_metrics = expert_collect_output["metrics"]
 
@@ -441,16 +445,16 @@ def main(config):
     def io_callback(metrics, traj_count):
         print("-"* 10, metrics)
         # TODO: cleanup by making metrics a dict of str->value, then generalizing this log
-        wandb.log({"success_rate": wandb.Histogram(metrics[0]),
-                   "pct_fires_put_out": wandb.Histogram(metrics[1]),
-                   "traj_count": traj_count[0]})
+        wandb.log({"expert/success_rate": wandb.Histogram(metrics[0]),
+                   "expert/pct_fires_put_out": wandb.Histogram(metrics[1]),
+                   "expert/traj_count": traj_count[0]})
     jax.debug.callback(io_callback, expert_metrics, expert_traj_count)
     
     if config["VISUALIZE_FINAL_POLICY"]:
         save_dir = os.path.join(config['SAVE_PATH'], env_name)
         os.makedirs(save_dir, exist_ok=True)
 
-        visualize_states(save_dir, alg_name, viz_test_env, config, expert_viz_env_states)
+        visualize_states(save_dir, "EXPERT_HEURISTIC", viz_test_env, config, expert_viz_env_states)
 
     # force multiruns to finish correctly
     wandb.finish()
