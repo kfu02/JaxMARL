@@ -22,19 +22,20 @@ class SimpleFireMPE(SimpleMPE):
 
         self.capability_aware = capability_aware
         self.num_capabilities = num_capabilities
+        self.dim_capabilities = num_agents * num_capabilities
 
         # components of the observation
         pos_dim = num_agents * 2
         vel_dim = 2 # only ego agent
-        cap_dim = num_agents * num_capabilities
         fire_pos_dim = num_landmarks * 2
         fire_rad_dim = num_landmarks
         observation_spaces = {
-            i:Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + cap_dim + fire_pos_dim + fire_rad_dim)) 
+            i:Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + self.dim_capabilities + fire_pos_dim + fire_rad_dim)) 
             for i in agents
         }
 
-        self.colour = [AGENT_COLOUR] * num_agents + [OBS_COLOUR] * num_landmarks
+        # agent color, landmark color
+        self.colour = [(115, 243, 115)] * num_agents + [(255, 64, 64)] * num_landmarks
 
         # env specific parameters
         self.test_team = kwargs["test_team"] if "test_team" in kwargs else None
@@ -94,10 +95,10 @@ class SimpleFireMPE(SimpleMPE):
             # roll to remove ego agent
             other_cap = jnp.roll(other_cap, shift=self.num_agents - aidx - 1, axis=0)[:self.num_agents-1, :]
 
-            # zero-out capabilities for non-capability-aware baselines
+            # mask out capabilities for non-capability-aware baselines
             if not self.capability_aware:
-                other_cap = jnp.full(other_cap.shape, -1e3)
-                ego_cap = jnp.full(ego_cap.shape, -1e3)
+                other_cap = jnp.full(other_cap.shape, MASK_VAL)
+                ego_cap = jnp.full(ego_cap.shape, MASK_VAL)
 
             # give agents the pos and rad of all landmarks (fires)
             landmark_p_pos = state.p_pos[self.num_agents:]
@@ -260,7 +261,6 @@ class SimpleFireMPE(SimpleMPE):
 
         # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
         selected_agents = jax.random.choice(key_c, self.num_agents, shape=(self.num_agents,), replace=False)
-
         agent_rads = self.agent_rads[selected_agents]
         agent_accels = self.agent_accels[selected_agents]
 

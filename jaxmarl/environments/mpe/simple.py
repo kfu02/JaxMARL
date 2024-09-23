@@ -127,12 +127,12 @@ class SimpleMPE(MultiAgentEnv):
 
         if "agent_rads" in kwargs:
             self.agent_rads = kwargs["agent_rads"]
-            assert (len(self.agent_rads) >= self.num_agents), f"Not enough agent_rads, {len(self.agent_rads)} < {self.num_agents}"
+            # assert (len(self.agent_rads) >= self.num_agents), f"Not enough agent_rads, {len(self.agent_rads)} < {self.num_agents}"
             self.agent_rads = jnp.array(self.agent_rads)
 
         if "agent_accels" in kwargs:
             self.agent_accels = kwargs["agent_accels"]
-            assert (len(self.agent_accels) >= self.num_agents), f"Not enough agent_accels, {len(self.agent_accels)} < {self.num_agents}"
+            # assert (len(self.agent_accels) >= self.num_agents), f"Not enough agent_accels, {len(self.agent_accels)} < {self.num_agents}"
             self.agent_accels = jnp.array(self.agent_accels)
 
         if "moveable" in kwargs:
