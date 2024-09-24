@@ -33,10 +33,11 @@ class SimpleTransportMPE(SimpleMPE):
         vel_dim = 2  # for ego agent
         material_depot_dim = 2 * 2 # 2 materials, 2 positions
         construction_site_dim = 2
+        payload_dim = 1
 
         # initialize observation space for each agent
         observation_spaces = {
-            i: Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + self.dim_capabilities + material_depot_dim + construction_site_dim))
+            i: Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + material_depot_dim + construction_site_dim + payload_dim + self.dim_capabilities))
             for i in agents
         }
 
@@ -276,8 +277,8 @@ class SimpleTransportMPE(SimpleMPE):
             c=jnp.zeros((self.num_agents, self.dim_c)),
             accel=agent_accels,
             rad=jnp.concatenate(
-                # NOTE: here, must define landmark rad as well, by default landmarks are 0.05
-                [agent_rads, jnp.full((self.num_landmarks), 0.05)]
+                # NOTE: here, must define landmark rad as well, by default landmarks are 0.20
+                [agent_rads, jnp.full((self.num_landmarks), 0.20)]
             ),
             done=jnp.full((self.num_agents), False),
             step=0,

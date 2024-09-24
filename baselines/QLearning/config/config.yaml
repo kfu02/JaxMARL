@@ -5,7 +5,7 @@ SEED: 76
 # wandb params
 ENTITY: star-lab-gt
 PROJECT: JaxMARL
-WANDB_MODE: offline
+WANDB_MODE: online
 
 # where to save the params (if None, will not save)
 SAVE_PATH: baselines/QLearning/checkpoints
