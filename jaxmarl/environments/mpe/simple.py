@@ -305,8 +305,8 @@ class SimpleMPE(MultiAgentEnv):
             ),
             done=jnp.full((self.num_agents), False),
             step=0,
-            payload=jnp.zeros((self.num_agents), 1)
-            capacity=agent_capacities
+            payload=jnp.zeros((self.num_agents, 1)),
+            capacity=agent_capacities,
         )
 
         return self.get_obs(state), state
