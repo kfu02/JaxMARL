@@ -128,7 +128,60 @@ def expert_heuristic_simple_fire(valid_set_partitions, num_landmarks, obs_dict):
 
     return actions
 
-def make_expert_buffer(config, log_train_env):
+def expert_heuristic_simple_transport(obs_dict):
+    # Stack observations to be per-environment
+    all_obs = jnp.stack(list(obs_dict.values()))  # [n_agents, ?, n_envs, obs_dim]
+    all_obs = all_obs.squeeze(1)  # [n_agents, n_envs, obs_dim]
+    
+    n_agents, n_envs, obs_dim = all_obs.shape
+    
+    # action space
+    unit_vectors = jnp.array([[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]])  # [9, 2]
+
+    # split up observation based on below observation space construction 
+    # obs = jnp.concatenate([
+    #     ego_pos.flatten(),  # 2
+    #     rel_other_pos.flatten(),  # N-1, 2
+    #     ego_vel.flatten(),  # 2
+    #     rel_landmark_p_pos.flatten(), # 3, 2
+    #     payload.flatten(), # 1
+    #     # NOTE: caps must go last for hypernet logic
+    #     ego_cap.flatten(),  # n_cap
+    #     other_cap.flatten(),  # N-1, n_cap
+    # ])
+
+    # landmark relative locations ordered [concrete depot, lumber depot, construction site]
+    landmark_start = (4 + (n_agents-1)*2)
+    rel_landmark_p_pos = all_obs[..., landmark_start:landmark_start+(3*2)].reshape(n_agents, n_envs, 3, 2)  # [n_agents, n_envs, 3, 2]
+
+    # payload
+    payload_start = 2+(n_agents-1)*2+2+(3*2)
+    payload = all_obs[..., payload_start]  # [n_agents, n_envs]
+
+    # ego capability
+    ego_cap_start = payload_start + 1
+    ego_cap = all_obs[..., ego_cap_start:ego_cap_start + 2]  # [n_agents, n_envs, 2]
+
+    # If payload == 0: move towards landmark idx = argmax(ego_cap), else move towards construction site
+    target_landmark_idx = jnp.where(payload == 0, jnp.argmax(ego_cap, axis=-1), 2)  # [n_agents, n_envs]
+    # target_landmark_idx = jnp.ones((n_agents, n_envs)).astype(int)
+    
+    # get vectors to landmarks
+    target_landmark_rel_pos = jnp.take_along_axis(rel_landmark_p_pos, target_landmark_idx[..., None, None], axis=-2).squeeze(-2)  # [n_agents, n_envs, 2]
+    norm_direction = target_landmark_rel_pos / (jnp.linalg.norm(direction, axis=-1, keepdims=True))
+
+    # get optimal direction
+    action_alignment = jnp.einsum('aij,bj->aib', norm_direction, unit_vectors)
+    optimal_actions = jnp.argmax(action_alignment, axis=-1)
+    # optimal_actions = jnp.where(near_target.squeeze(), jnp.zeros_like(optimal_actions), optimal_actions)
+    optimal_actions = optimal_actions.T
+    actions = {}
+    for i, agent_name in enumerate(obs_dict.keys()):
+        actions[agent_name] = optimal_actions[:, i]
+    
+    return actions
+
+def make_expert_buffer_fire(config, log_train_env):
     """
     return function collect, which collects 1 seed's worth of traj data with the expert heuristic
     and computes metrics over all data
@@ -346,6 +399,159 @@ def make_expert_buffer(config, log_train_env):
 
     return collect
 
+def make_expert_buffer_transport(config, log_train_env):
+    """
+    return function collect, which collects 1 seed's worth of traj data with the expert heuristic
+    and computes metrics over all data
+    """
+
+    def collect(rng):
+        # INIT ENV
+        rng, _rng = jax.random.split(rng)
+
+        # NOTE: added preprocess_obs=False to avoid adding agent_ids to each obs
+        # NOTE: this has the side effect of also removing any zero-padding to
+        # standardize obs dimensions across agents, may be issue later
+        wrapped_env = CTRolloutManager(log_train_env, batch_size=config["NUM_ENVS"], preprocess_obs=False)
+        init_obs, env_state = wrapped_env.batch_reset(_rng)
+        init_dones = {agent:jnp.zeros((config["NUM_ENVS"]), dtype=bool) for agent in log_train_env.agents+['__all__']}
+
+        # INIT BUFFER (randomly sample a trajectory to learn the structure)
+        def _env_sample_step(env_state, unused):
+            rng, key_a, key_s = jax.random.split(jax.random.PRNGKey(0), 3) # use a dummy rng here
+            key_a = jax.random.split(key_a, log_train_env.num_agents)
+            actions = {agent: wrapped_env.batch_sample(key_a[i], agent) for i, agent in enumerate(log_train_env.agents)}
+            obs, env_state, rewards, dones, infos = wrapped_env.batch_step(key_s, env_state, actions)
+            transition = Transition(obs, actions, rewards, dones, infos)
+            return env_state, transition
+        _, sample_traj = jax.lax.scan(
+            _env_sample_step, env_state, None, config["NUM_STEPS"]
+        )
+        sample_traj_unbatched = jax.tree.map(lambda x: x[:, 0], sample_traj) # remove the NUM_ENV dim
+        buffer_size = config['NUM_ENVS'] * config["TRAJECTORIES_PER_ENV"]
+        buffer = fbx.make_trajectory_buffer(
+            max_length_time_axis=buffer_size//config['NUM_ENVS'],
+            min_length_time_axis=config['BUFFER_BATCH_SIZE'],
+            sample_batch_size=config['BUFFER_BATCH_SIZE'],
+            add_batch_size=config['NUM_ENVS'],
+            sample_sequence_length=1,
+            period=1,
+        )
+        buffer_state = buffer.init(sample_traj_unbatched) 
+
+        def collect_trajectory(runner_state, unused):
+            """
+            Add 1 trajectory to the buffer, and update the runner_state from the previous step accordingly. Compatible with jax.lax.scan.
+            """
+            # break runner_state tuple up
+            traj_count, buffer_state, env_state, init_obs, init_dones, rng = runner_state
+
+            def _env_step(step_state, unused):
+                """
+                Handles a single step in the env, acting according to the expert heuristic. Compatible with jax.lax.scan.
+                """
+
+                env_state, last_obs, last_dones, rng = step_state
+
+                # prepare rngs for actions and step
+                rng, key_a, key_s = jax.random.split(rng, 3)
+
+                # select action from expert
+                # add a dummy time_step dimension to the agent input
+                obs_   = {a:last_obs[a] for a in log_train_env.agents} # ensure to not pass the global state (obs["__all__"]) to the network
+                obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
+                dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
+
+                actions = expert_heuristic_simple_transport(obs_)
+
+                # step in env with action
+                obs, env_state, rewards, dones, infos = wrapped_env.batch_step(key_s, env_state, actions)
+                transition = Transition(last_obs, actions, rewards, dones, infos)
+
+                # update step_state for next step, return collected transition/viz_env_state to be aggregated
+                step_state = (env_state, obs, dones, rng)
+                viz_env_state = env_state.env_state
+                return step_state, (transition, viz_env_state)
+
+            # prepare the step state and collect the episode trajectory
+            rng, _rng = jax.random.split(rng)
+
+            step_state = (
+                env_state,
+                init_obs,
+                init_dones,
+                _rng,
+            )
+
+            # step_state is the final step_state after NUM_STEPS
+            # traj_batch/viz_env_states are sequences len NUM_STEPS (from a single rollout)
+            # NOTE: viz_env_states overwritten each time, this is okay for visualization purposes
+            step_state, (traj_batch, viz_env_states) = jax.lax.scan(
+                _env_step, step_state, None, config["NUM_STEPS"]
+            )
+
+            # compute metrics for this trajectory
+            final_env_state = step_state[0].env_state
+            metrics = {
+                'returns': jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), traj_batch.rewards),
+            }
+
+            # update the buffer state to include this traj
+            buffer_traj_batch = jax.tree_util.tree_map(
+                lambda x:jnp.swapaxes(x, 0, 1)[:, np.newaxis], # put the batch dim first and add a dummy sequence dim
+                traj_batch
+            ) # (num_envs, 1, time_steps, ...)
+            buffer_state = buffer.add(buffer_state, buffer_traj_batch)
+
+            # reset the environment
+            rng, _rng = jax.random.split(rng)
+            init_obs, env_state = wrapped_env.batch_reset(_rng)
+            init_dones = {agent:jnp.zeros((config["NUM_ENVS"]), dtype=bool) for agent in log_train_env.agents+['__all__']}
+
+            # return updated runner_state for next iteration
+            runner_state = (
+                # updated for next iter
+                traj_count+1,
+                buffer_state,
+                # from reset env
+                env_state,
+                init_obs,
+                init_dones,
+                # to branch off of later 
+                rng,
+            )
+
+            return runner_state, (metrics, viz_env_states)
+
+        # collect the number of trajectories we want from each env
+        rng, _rng = jax.random.split(rng)
+        traj_count = 0
+        runner_state = (
+            # init state before lax.scan
+            traj_count,
+            buffer_state,
+            # from reset env
+            env_state,
+            init_obs,
+            init_dones,
+            # to branch off of later
+            _rng,
+        )
+        runner_state, (metrics, viz_env_states) = jax.lax.scan(
+            collect_trajectory, runner_state, None, config["TRAJECTORIES_PER_ENV"]
+        )
+
+        # find the mean of all metrics for this seed
+        metrics = jax.tree_util.tree_map(
+            lambda x: x.mean(),
+            metrics
+        )
+
+        # then return info aggregated across all trajectories
+        return {'runner_state': runner_state, 'metrics': metrics, "viz_env_states": viz_env_states}
+
+    return collect
+
 def visualize_states(save_dir, alg_name, viz_test_env, config, viz_env_states):
     """
     Build a list of states manually from vectorized seq returned by make_train() for desired seeds/envs.
@@ -421,6 +627,14 @@ def main(config):
     # collect one full buffer for each seed
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
+
+    # select correct env buffer collection function
+    make_expert_buffer = None
+    if env_name == "MPE_simple_fire":
+        make_expert_buffer = make_expert_buffer_fire
+    if env_name == "MPE_simple_transport":
+        make_expert_buffer = make_expert_buffer_transport
+
     collect_vjit = jax.jit(jax.vmap(make_expert_buffer(config["alg"], log_train_env)))
     expert_collect_output = jax.block_until_ready(collect_vjit(rngs))
 
@@ -441,9 +655,7 @@ def main(config):
     def io_callback(metrics, traj_count):
         print("-"* 10, metrics)
         # TODO: cleanup by making metrics a dict of str->value, then generalizing this log
-        wandb.log({"success_rate": wandb.Histogram(metrics[0]),
-                   "pct_fires_put_out": wandb.Histogram(metrics[1]),
-                   "traj_count": traj_count[0]})
+        wandb.log({"returns": wandb.Histogram(metrics["returns"]["__all__"])})
     jax.debug.callback(io_callback, expert_metrics, expert_traj_count)
     
     if config["VISUALIZE_FINAL_POLICY"]:

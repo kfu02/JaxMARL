@@ -113,21 +113,22 @@ class SimpleTransportMPE(SimpleMPE):
         landmark_rads = state.rad[self.num_agents:]
         mask = dists <= landmark_rads
 
+        def io_callback(x, i):
+            if x[0][0].item() == 1.0:
+                print(f"payload {i}: {x[0][0].item()}")
         # update payload for agents on concrete depot
-        payload = jnp.where(jnp.bitwise_and(mask[:, 0].reshape(-1,1), (state.payload == 0)), state.capacity[:, 0].reshape(-1,1), state.payload)
+        payload = jnp.where(jnp.bitwise_and(mask[:, 0].reshape(-1,1), (state.payload == 0.)), state.capacity[:, 0].reshape(-1,1), state.payload)
+        # jax.debug.callback(io_callback, payload, 0)
 
         # update payload for agents on lumber depot
-        payload = jnp.where(jnp.bitwise_and(mask[:, 1].reshape(-1,1), (state.payload == 0)), state.capacity[:, 1].reshape(-1,1), payload)
+        payload = jnp.where(jnp.bitwise_and(mask[:, 1].reshape(-1,1), (state.payload == 0.)), state.capacity[:, 1].reshape(-1,1), payload)
+        # jax.debug.callback(io_callback, payload, 1)
 
         # reset payload for agents on construction site
-        payload = jnp.where(mask[:, 2].reshape(-1,1), jnp.zeros_like(payload), payload)
+        payload = jnp.where(jnp.bitwise_and(mask[:, 2].reshape(-1,1), (state.payload > 0.)), jnp.zeros_like(payload), payload)
+        # jax.debug.callback(io_callback, payload, 2)
 
         state = state.replace(
-            p_pos=p_pos,
-            p_vel=p_vel,
-            c=c,
-            done=done,
-            step=state.step,
             payload=payload,
         )
         #######################################################################################
@@ -165,9 +166,7 @@ class SimpleTransportMPE(SimpleMPE):
             ego_vel = state.p_vel[aidx, :]
 
             # agent capabilities, separate ego capability from other agents capability
-            other_cap = jnp.stack([
-                state.accel.flatten(), state.rad[:self.num_agents].flatten(), # landmark rad is included in state.rad
-            ], axis=-1)
+            other_cap = state.capacity
             ego_cap = other_cap[aidx, :]
             other_cap = jnp.roll(other_cap, shift=self.num_agents - aidx - 1, axis=0)[:self.num_agents-1, :]
             
@@ -229,7 +228,7 @@ class SimpleTransportMPE(SimpleMPE):
             agent_pos = state.p_pos[agent_i]
             construction_site_pos = state.p_pos[-1]
             dist = jnp.array([jnp.linalg.norm(agent_pos - construction_site_pos)])
-            return jnp.bitwise_and(dist <= state.rad[-1], state.payload[agent_i] > 0)        
+            return jnp.bitwise_and(dist <= state.rad[-1], state.payload[agent_i] > 0) * state.payload[agent_i]      
 
         rew = {
             a: (self.concrete_pickup_reward * _load_concrete_rew(i) + self.lumber_pickup_reward * _load_lumber_rew(i) + self.dropoff_reward * _dropoff_rew(i))[0]
@@ -251,9 +250,9 @@ class SimpleTransportMPE(SimpleMPE):
                 ),
                 jnp.array(
                     [
-                        [-0.5, 0.5],
-                        [0.5, 0.5],
-                        [0.0, -0.5],
+                        [-1.0, 1.0],
+                        [1.0, 1.0],
+                        [0.0, -1.0],
                     ]
                 ),
             ]
@@ -277,8 +276,8 @@ class SimpleTransportMPE(SimpleMPE):
             c=jnp.zeros((self.num_agents, self.dim_c)),
             accel=agent_accels,
             rad=jnp.concatenate(
-                # NOTE: here, must define landmark rad as well, by default landmarks are 0.20
-                [agent_rads, jnp.full((self.num_landmarks), 0.20)]
+                # NOTE: here, must define landmark rad as well, by default landmarks are 0.30
+                [agent_rads, jnp.full((self.num_landmarks), 0.30)]
             ),
             done=jnp.full((self.num_agents), False),
             step=0,
