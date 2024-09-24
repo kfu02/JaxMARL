@@ -1,11 +1,11 @@
 ENV_NAME: MPE_simple_transport
 ENV_KWARGS:
-  max_steps: 100 # 25
+  max_steps: 300 # 25
 
   # reward shaping
   lumber_pickup_reward: 0.25 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
-  concrete_pickup_reward: 0.25 # reward given to an agent for pickup of concrete if their capcitity is > 0.
-  dropoff_reward: 0.75 # the amount of reward an agent gets for dropping off a resource
+  concrete_pickup_reward: 0.25 # reward given to an agent for pickup of concrete if their capacity is > 0.
+  dropoff_reward: 1 # the amount of reward an agent gets for dropping off a resource
 
   # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
   capability_aware: True # T/F
