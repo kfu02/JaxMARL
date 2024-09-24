@@ -117,7 +117,7 @@ class SimpleTransportMPE(SimpleMPE):
         payload = jnp.where(jnp.bitwise_and(mask[:, 0].reshape(-1,1), (state.payload == 0)), state.capacity[:, 0].reshape(-1,1), state.payload)
 
         # update payload for agents on lumber depot
-        payload = jnp.where(jnp.bitwise_and(mask[:, 1].reshape(-1,1), (state.payload == 0)), state.capacity[:, 0].reshape(-1,1), payload)
+        payload = jnp.where(jnp.bitwise_and(mask[:, 1].reshape(-1,1), (state.payload == 0)), state.capacity[:, 1].reshape(-1,1), payload)
 
         # reset payload for agents on construction site
         payload = jnp.where(mask[:, 2].reshape(-1,1), jnp.zeros_like(payload), payload)

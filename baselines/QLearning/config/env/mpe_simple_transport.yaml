@@ -1,6 +1,6 @@
 ENV_NAME: MPE_simple_transport
 ENV_KWARGS:
-  max_steps: 300 # 25
+  max_steps: 100 # 25
 
   # reward shaping
   lumber_pickup_reward: 0.25 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
