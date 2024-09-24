@@ -168,7 +168,7 @@ def expert_heuristic_simple_transport(obs_dict):
     
     # get vectors to landmarks
     target_landmark_rel_pos = jnp.take_along_axis(rel_landmark_p_pos, target_landmark_idx[..., None, None], axis=-2).squeeze(-2)  # [n_agents, n_envs, 2]
-    norm_direction = target_landmark_rel_pos / (jnp.linalg.norm(direction, axis=-1, keepdims=True))
+    norm_direction = target_landmark_rel_pos / (jnp.linalg.norm(target_landmark_rel_pos, axis=-1, keepdims=True))
 
     # get optimal direction
     action_alignment = jnp.einsum('aij,bj->aib', norm_direction, unit_vectors)
