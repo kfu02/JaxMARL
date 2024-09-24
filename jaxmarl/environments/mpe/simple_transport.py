@@ -3,13 +3,15 @@ import jax.numpy as jnp
 import chex
 from functools import partial
 from gymnax.environments.spaces import Box
+from jaxmarl.environments.mpe.simple import SimpleMPE, State
+from jaxmarl.environments.mpe.default_params import *
 from typing import Tuple, Dict
 
-class SimpleTransportMPE:
+class SimpleTransportMPE(SimpleMPE):
     def __init__(
         self,
-        num_agents=3,
-        material_dest_range=(0.1, 0.5),
+        num_agents=4,
+        action_type=DISCRETE_ACT,
         capability_aware=True,
         num_capabilities=2,
         **kwargs,
@@ -17,12 +19,14 @@ class SimpleTransportMPE:
         agents = ["agent_{}".format(i) for i in range(num_agents)]
 
         # 3 landmarks, [concrete depo, lumber depo, construction site]
-        materials = ["landmark_{}".format(i) for i in range(3)]
+        self.num_landmarks = 3
+        landmarks = ["landmark_{}".format(i) for i in range(3)]
 
         self.num_agents = num_agents
-        self.num_materials = 2
+        self.capability_aware = capability_aware
         self.num_capabilities = num_capabilities
         self.dim_capabilities = num_agents * num_capabilities
+        self.test_team = kwargs.get("test_team", None)
 
         # observation dimensions
         pos_dim = num_agents * 2
@@ -32,22 +36,27 @@ class SimpleTransportMPE:
 
         # initialize observation space for each agent
         observation_spaces = {
-            i: Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + self.dim_capabilities + material_pos_dim + material_dest_dim))
+            i: Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + self.dim_capabilities + material_depot_dim + construction_site_dim))
             for i in agents
         }
 
         # overriden in reset to reflect max capability
-        self.colour = [(115, 243, 115)] * num_agents + [(255, 64, 64)] * num_materials
+        self.colour = [(115, 243, 115)] * num_agents + [(255, 64, 64)] * len(landmarks)
 
         # reward shaping terms
-        self.concrete_pickup_reward = kwargs.get("concrete_pickup_reward", 1)
-        self.lumber_pickup_reward = kwargs.get("lumber_pickup_reward", 1)
-        self.dropoff_reward = kwargs.get("dropoff_reward", 1)
+        self.concrete_pickup_reward = kwargs.get("concrete_pickup_reward", 0.25)
+        self.lumber_pickup_reward = kwargs.get("lumber_pickup_reward", 0.25)
+        self.dropoff_reward = kwargs.get("dropoff_reward", 0.75)
+
+        # no collisions in this env
+        collide = jnp.concatenate(
+            [jnp.full((num_agents+len(landmarks)), False)]
+        )
 
         super().__init__(
             num_agents=num_agents,
             agents=agents,
-            num_landmarks=num_landmarks,
+            num_landmarks=len(landmarks),
             landmarks=landmarks,
             action_type=action_type,
             observation_spaces=observation_spaces,
@@ -94,30 +103,30 @@ class SimpleTransportMPE:
         # only update payloads after rewards are applied (I think this makes sense?)
         #######################################################################################
         # get distance between agents and landmarks
-        agent_p_pos = state.p_pos[self.num_agents:]
+        agent_p_pos = state.p_pos[:self.num_agents]
         landmark_p_pos = state.p_pos[self.num_agents:]
         relative_positions = agent_p_pos[:, None, :] - landmark_p_pos[None, :, :]
-        dists = np.linalg.norm(relative_positions, axis=-1)
+        dists = jnp.linalg.norm(relative_positions, axis=-1)
 
         # get mask of agents within landmark radius
         landmark_rads = state.rad[self.num_agents:]
         mask = dists <= landmark_rads
 
         # update payload for agents on concrete depot
-        payload = jnp.where(mask[:, 0] & payload == 0, capacity[:, 0], payload)
+        payload = jnp.where(jnp.bitwise_and(mask[:, 0].reshape(-1,1), (state.payload == 0)), state.capacity[:, 0].reshape(-1,1), state.payload)
 
         # update payload for agents on lumber depot
-        payload = jnp.where(mask[:, 1] & payload == 0, capacity[:, 0], payload)
+        payload = jnp.where(jnp.bitwise_and(mask[:, 1].reshape(-1,1), (state.payload == 0)), state.capacity[:, 0].reshape(-1,1), payload)
 
         # reset payload for agents on construction site
-        payload = jnp.where(mask[:, 2], jnp.zeros_like(payload), payload)
+        payload = jnp.where(mask[:, 2].reshape(-1,1), jnp.zeros_like(payload), payload)
 
         state = state.replace(
             p_pos=p_pos,
             p_vel=p_vel,
             c=c,
             done=done,
-            step=state.step + 1,
+            step=state.step,
             payload=payload,
         )
         #######################################################################################
@@ -200,29 +209,29 @@ class SimpleTransportMPE:
             """
             agent_pos = state.p_pos[agent_i]
             concrete_depot_pos = state.p_pos[-3]
-            dist = jnp.linalg.norm(agent_pos - concrete_depot_pos)
-            return dist <= state.rad[-3] & state.payload[agent_i] == 0
+            dist = jnp.array([jnp.linalg.norm(agent_pos - concrete_depot_pos)])
+            return jnp.bitwise_and(dist <= state.rad[-3], state.payload[agent_i] == 0)
         
         def _load_lumber_rew(agent_i):
             """
             Reward agent for loading lumber if payload is empty.
             """
             agent_pos = state.p_pos[agent_i]
-            concrete_depot_pos = state.p_pos[-2]
-            dist = jnp.linalg.norm(agent_pos - concrete_depot_pos)
-            return dist <= state.rad[-2] & state.payload[agent_i] == 0
+            lumber_depot_pos = state.p_pos[-2]
+            dist = jnp.array([jnp.linalg.norm(agent_pos - lumber_depot_pos)])
+            return jnp.bitwise_and(dist <= state.rad[-2], state.payload[agent_i] == 0)
 
         def _dropoff_rew(agent_i):
             """
             Reward agent for dropping of materials if payload is non empty
             """
             agent_pos = state.p_pos[agent_i]
-            concrete_depot_pos = state.p_pos[-1]
-            dist = jnp.linalg.norm(agent_pos - concrete_depot_pos)
-            return dist <= state.rad[-1] & state.payload[agent_i] > 0        
+            construction_site_pos = state.p_pos[-1]
+            dist = jnp.array([jnp.linalg.norm(agent_pos - construction_site_pos)])
+            return jnp.bitwise_and(dist <= state.rad[-1], state.payload[agent_i] > 0)        
 
         rew = {
-            a: self.concrete_pickup_reward * _load_concrete_rew(i) + self.lumber_pickup_reward * _load_lumber_rew(i) + self.dropoff_reward * _dropoff_rew(i)
+            a: (self.concrete_pickup_reward * _load_concrete_rew(i) + self.lumber_pickup_reward * _load_lumber_rew(i) + self.dropoff_reward * _dropoff_rew(i))[0]
             for i, a in enumerate(self.agents)
         }
         return rew
@@ -249,13 +258,12 @@ class SimpleTransportMPE:
             ]
         )
 
-        randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
-        selected_agents = jax.random.choice(key_c, self.agent_range, shape=(self.num_agents,), replace=False)
-
+        # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
+        selected_agents = jax.random.choice(key_a, self.agent_range, shape=(self.num_agents,), replace=False)
         
         agent_rads = self.agent_rads[selected_agents]
         agent_accels = self.agent_accels[selected_agents]
-        agent_capacities = self.agent_capacities[selected_agents] if self.agent_capacities else np.zeros((self.num_agents, 2))
+        agent_capacities = self.agent_capacities[selected_agents]
 
         # if a test distribution is provided and this is a test_env, override capacities
         # NOTE: also add other capabilities here?
@@ -273,8 +281,8 @@ class SimpleTransportMPE:
             ),
             done=jnp.full((self.num_agents), False),
             step=0,
-            payload=jnp.zeros((self.num_agents), 1)
-            capacity=agent_capacities
+            payload=jnp.zeros((self.num_agents, 1)),
+            capacity=agent_capacities,
         )
 
         return self.get_obs(state), state

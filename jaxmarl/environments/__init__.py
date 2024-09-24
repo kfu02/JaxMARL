@@ -5,6 +5,7 @@ from .mpe import (
     SimpleWorldCommMPE,
     SimpleSpreadMPE,
     SimpleFireMPE,
+    SimpleTransportMPE,
     SimpleCryptoMPE,
     SimpleSpeakerListenerMPE,
     SimplePushMPE,
