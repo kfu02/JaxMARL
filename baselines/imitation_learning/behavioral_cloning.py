@@ -288,7 +288,15 @@ def make_expert_buffer(config, log_train_env):
 
             # compute metrics for this trajectory
             final_env_state = step_state[0].env_state
-            metrics = fire_env_metrics(final_env_state)
+            fire_metrics = fire_env_metrics(final_env_state)
+
+            rewards = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), traj_batch.rewards)
+            metrics = {
+                "returns": rewards['__all__'].mean(),
+                "test_returns": rewards['__all__'].mean(),
+                "test_fire_success_rate": fire_metrics[0],
+                "test_pct_fires_put_out": fire_metrics[1],
+            }
 
             # update the buffer state to include this traj
             buffer_traj_batch = jax.tree_util.tree_map(
@@ -335,11 +343,14 @@ def make_expert_buffer(config, log_train_env):
             collect_trajectory, runner_state, None, config["TRAJECTORIES_PER_ENV"]
         )
 
-        # find the mean of all metrics for this seed
-        metrics = jax.tree_util.tree_map(
-            lambda x: x.mean(),
-            metrics
-        )
+        # need to wrap in callback for wandb.log to work w/ jit'd func
+        def io_callback(metrics):
+            wandb.log({**{k:v.mean() for k, v in metrics.items()},
+                       # dummy steps so BC shows up on plotting
+                       "timestep": 0,
+                       "updates": 0,
+                       })
+        jax.debug.callback(io_callback, metrics)
 
         # then return info aggregated across all trajectories
         return {'runner_state': runner_state, 'metrics': metrics, "viz_env_states": viz_env_states}
@@ -368,7 +379,7 @@ def visualize_states(save_dir, alg_name, viz_test_env, config, viz_env_states):
                 state_seq.append(this_step_state)
 
             # save visualization to GIF for wandb display
-            visualizer = MPEVisualizer(viz_test_env, state_seq)
+            visualizer = MPEVisualizer(viz_test_env, state_seq, env_name=config["env"]["ENV_NAME"])
             video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
             visualizer.animate(video_fpath)
             wandb.log({f"env-{env}-seed-{seed}-rollout": wandb.Video(video_fpath)})
@@ -426,12 +437,10 @@ def main(config):
 
     expert_runner_state = expert_collect_output["runner_state"]
     expert_traj_count, expert_buffers, _, _, _, _ = expert_runner_state
+    wandb.log({"expert_traj_count": jnp.sum(expert_traj_count)})
 
     # TODO: iterate over expert buffers (with lax.scan?) and train policy to imitate demonstrations
     # see line 337 of qmix.py
-
-    jax.debug.print("expert traj count {}", expert_traj_count)
-    expert_metrics = expert_collect_output["metrics"]
 
     # shape for each element = (# seeds, # traj, # steps/env, # envs, # entities, DIM)
     # thus simply take the first traj for visualization purposes
@@ -440,15 +449,6 @@ def main(config):
         lambda x: x[:, 0, ...],
         expert_viz_env_states
     )
-
-    # need to wrap in callback for wandb.log to work w/ JAX
-    def io_callback(metrics, traj_count):
-        print("-"* 10, metrics)
-        # TODO: cleanup by making metrics a dict of str->value, then generalizing this log
-        wandb.log({"expert/success_rate": wandb.Histogram(metrics[0]),
-                   "expert/pct_fires_put_out": wandb.Histogram(metrics[1]),
-                   "expert/traj_count": traj_count[0]})
-    jax.debug.callback(io_callback, expert_metrics, expert_traj_count)
     
     if config["VISUALIZE_FINAL_POLICY"]:
         save_dir = os.path.join(config['SAVE_PATH'], env_name)

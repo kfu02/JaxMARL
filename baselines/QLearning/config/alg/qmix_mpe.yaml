@@ -2,7 +2,7 @@ NUM_ENVS: 8
 # NOTE: NUM_STEPS now defined by config.env.env_kwargs.max_steps
 BUFFER_SIZE: 5000
 BUFFER_BATCH_SIZE: 32
-TOTAL_TIMESTEPS: 4e6 # 2050000
+TOTAL_TIMESTEPS: 10e6 # 2050000
 
 # agent network params
 PARAMETERS_SHARING: True
