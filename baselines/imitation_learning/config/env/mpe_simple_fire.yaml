@@ -1,20 +1,26 @@
-"ENV_NAME": "MPE_simple_fire"
-"ENV_KWARGS":
-  "capability_aware": True # T/F
-  "max_steps": 50 # 25
+ENV_NAME: MPE_simple_fire
+ENV_KWARGS:
+  max_steps: 50 # 25
+
+  fire_rad_range: [0.2, 0.3]
+
+  # reward shaping
+  fire_out_reward: 0.5
+  uncovered_penalty_factor: 1
+  pos_shaping_factor: 0.01
 
   # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
-  "num_capabilities": 2
-  "num_agents": 3
-
-  "fire_rad_range": [0.2, 0.3]
+  capability_aware: True # T/F
+  num_capabilities: 2
+  num_agents: 5
+  num_landmarks: 3
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
   # NOTE: hijacking agent_rads = firefighting capability
-  "agent_rads": [0.3, 0.2, 0.1, 0.1, 0.2]
-  "agent_accels": [1, 2, 3, 3, 2]
+  agent_rads: [0.3, 0.2, 0.1, 0.1, 0.2]
+  agent_accels: [1, 2, 3, 3, 2]
 
-  # "test_team":
-  #   "agent_rads": [0.4, 0.08, 0.08]
-  #   "agent_accels": [1, 3, 3]
+  # test_team:
+  #   agent_rads: [0.4, 0.15, 0.08]
+  #   agent_accels: [0.75, 3, 4]
 

@@ -9,7 +9,7 @@
 
 # where to save the params (if None, will not save)
 # TODO: uncomment this and test the save/viz sections
-"SAVE_PATH": "baselines/imitation-learning/checkpoints"
+"SAVE_PATH": "baselines/imitation_learning/checkpoints"
 
 "VISUALIZE_FINAL_POLICY": True
 # number of seeds/envs to visualize
