@@ -1,12 +1,17 @@
 NUM_ENVS: 8
-PARAMETERS_SHARING: True
 
 # NOTE: NUM_STEPS (max_steps_per_env) defined by env.yaml
 TRAJECTORIES_PER_ENV: 32
 # BUFFER_SIZE = NUM_ENVS * TRAJECTORIES_PER_ENV
 # TODO: I believe this batch size is actually 32 trajectories, not 32 steps
 BUFFER_BATCH_SIZE: 32
-# TRAIN_ITERS: 1000
+
+# training
+TRAIN_ITERS: 1000
+MAX_GRAD_NORM: 25
+LR: 0.001
+EPS_ADAM: 0.001
+WEIGHT_DECAY_ADAM: 0.00001
 
 # agent network params
 PARAMETERS_SHARING: True
