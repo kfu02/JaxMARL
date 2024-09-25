@@ -64,7 +64,7 @@ class MPEWorldStateWrapper(JaxMARLWrapper):
     
     def world_state_size(self):
         spaces = [self._env.observation_space(agent) for agent in self._env.agents]
-        return sum([space.shape[-1] for space in spaces])
+        return sum([space.shape for space in spaces])
 
 class ScannedRNN(nn.Module):
     @functools.partial(
@@ -196,7 +196,7 @@ def make_train(config):
         critic_network = CriticRNN(config=config)
         rng, _rng_actor, _rng_critic = jax.random.split(rng, 3)
         ac_init_x = (
-            jnp.zeros((1, config["NUM_ENVS"], env.observation_space(env.agents[0]).shape[0])),
+            jnp.zeros((1, config["NUM_ENVS"], env.observation_space(env.agents[0]).shape)),
             jnp.zeros((1, config["NUM_ENVS"])),
         )
         ac_init_hstate = ScannedRNN.initialize_carry(config["NUM_ENVS"], config["GRU_HIDDEN_DIM"])
