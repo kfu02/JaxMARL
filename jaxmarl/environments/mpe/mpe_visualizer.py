@@ -57,12 +57,19 @@ class MPEVisualizer(object):
         self.ax.set_ylim([-ax_lim, ax_lim])
         
         self.entity_artists = []
+        self.labels = []
         for i in range(self.env.num_agents):
             if self.env_name == "MPE_simple_fire":
                 # in FireEnv, draw agents as empty circles so they can be seen if they overlap
                 c = Circle(
                     state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
                 )
+            elif self.env_name == "MPE_simple_transport":
+                c = Circle(
+                    state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255
+                )
+                x, y = c.center
+                self.labels.append(self.ax.annotate(f"{state.capacity[i]}", (x+1.25*state.rad[i], y), color="black", ha="left", va="center", size=6))
             else:
                 # otherwise default to filled circles
                 c = Circle(
@@ -73,7 +80,7 @@ class MPEVisualizer(object):
             self.entity_artists.append(c)
 
         for j in range(self.env.num_landmarks):
-            if self.env_name == "MPE_simple_fire":
+            if self.env_name == "MPE_simple_fire" or self.env_name == "MPE_simple_transport":
                 # in FireEnv, draw agents as empty circles so they can be seen if they overlap
                 i = j + self.env.num_agents
                 c = Circle(
@@ -107,6 +114,11 @@ class MPEVisualizer(object):
         state = self.state_seq[frame]
         for i, c in enumerate(self.entity_artists):
             c.center = state.p_pos[i]
+
+        for i in range(len(self.labels)):
+            x, y = self.entity_artists[i].center
+            self.labels[i].set_x(x+1.25*state.rad[i])
+            self.labels[i].set_y(y)
             
         self.step_counter.set_text(f"Step: {state.step}")
         

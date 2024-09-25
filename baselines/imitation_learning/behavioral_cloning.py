@@ -736,6 +736,7 @@ def visualize_states(save_dir, alg_name, viz_test_env, config, viz_env_states):
                     accel=viz_env_states.accel[seed, i, env, ...],
                     rad=viz_env_states.rad[seed, i, env, ...],
                     done=viz_env_states.done[seed, i, env, ...],
+                    capacity=viz_env_states.capacity[seed, i, env, ...],
                     step=i,
                 )
                 state_seq.append(this_step_state)

@@ -42,7 +42,7 @@ class SimpleTransportMPE(SimpleMPE):
         }
 
         # overriden in reset to reflect max capability
-        self.colour = [(115, 243, 115)] * num_agents + [(255, 64, 64)] * len(landmarks)
+        self.colour = [(169, 169, 169)] * num_agents + [(0, 0, 255), (0, 255, 0), (128,0,128)] 
 
         # reward shaping terms
         self.concrete_pickup_reward = kwargs.get("concrete_pickup_reward", 0.25)
