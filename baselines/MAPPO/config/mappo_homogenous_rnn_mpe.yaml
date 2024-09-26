@@ -1,7 +1,7 @@
 LR: 2e-3
 NUM_ENVS: 16 
 NUM_STEPS: 128 
-TOTAL_TIMESTEPS: 2e7
+TOTAL_TIMESTEPS: 6144
 FC_DIM_SIZE: 128
 GRU_HIDDEN_DIM: 128
 UPDATE_EPOCHS: 4
@@ -17,8 +17,19 @@ ACTIVATION: tanh
 ENV_NAME: MPE_simple_transport # MPE_simple_spread_v3
 SEED: 1
 NUM_SEEDS: 3
-ENV_KWARGS: {}
+ENV_KWARGS: {
+  agent_rads: [0.2, 0.2, 0.2, 0.2],
+  agent_accels: [2, 2, 2, 2],
+  agent_capacities: [[0.0, 1.0], [0.0, 1.0], [0.0, 1.0], [0.0, 1.0]],
+}
 ANNEAL_LR: True
+
+# Visualization
+VISUALIZE_FINAL_POLICY: True
+# number of seeds/envs to visualize
+VIZ_NUM_ENVS: 1
+VIZ_NUM_SEEDS: 1
+VIZ_SAVE_PATH: "baselines/MAPPO/media"
 
 # WandB Params
 ENTITY: star-lab-gt
