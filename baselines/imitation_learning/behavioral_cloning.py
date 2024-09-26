@@ -221,12 +221,14 @@ def make_train(config, log_train_env, log_test_env):
             actions = {agent: wrapped_env.batch_sample(key_a[i], agent) for i, agent in enumerate(log_train_env.agents)}
             obs, env_state, rewards, dones, infos = wrapped_env.batch_step(key_s, env_state, actions)
             transition = Transition(obs, actions, rewards, dones, infos)
-            return env_state, transition
-        _, sample_traj = jax.lax.scan(
+            viz_env_state = env_state.env_state
+            return env_state, (transition, viz_env_state)
+
+        _, (sample_traj, sample_viz_env_states) = jax.lax.scan(
             _env_sample_step, env_state, None, config["NUM_STEPS"]
         )
         sample_traj_unbatched = jax.tree.map(lambda x: x[:, 0], sample_traj) # remove the NUM_ENV dim
-        expert_buffer_size = config['NUM_ENVS'] * config["TRAJECTORIES_PER_ENV"]
+        expert_buffer_size = config['EXPERT_BUFFER_SIZE']
         expert_buffer = fbx.make_trajectory_buffer(
             max_length_time_axis=expert_buffer_size//config['NUM_ENVS'],
             min_length_time_axis=config['BUFFER_BATCH_SIZE'],
@@ -241,8 +243,7 @@ def make_train(config, log_train_env, log_test_env):
             """
             Add 1 trajectory to the expert_buffer, and update the runner_state from the previous step accordingly. Compatible with jax.lax.scan.
             """
-            # break runner_state tuple up
-            traj_count, expert_buffer_state, env_state, init_obs, init_dones, rng = runner_state
+            traj_count, expert_buffer_state, env_state, init_obs, init_dones, _, _, rng = runner_state
 
             def _expert_env_step(step_state, unused):
                 """
@@ -322,16 +323,24 @@ def make_train(config, log_train_env, log_test_env):
                 env_state,
                 init_obs,
                 init_dones,
+                # overwritten each time
+                metrics,
+                viz_env_states,
                 # to branch off of later 
                 rng,
             )
 
-            return runner_state, (metrics, viz_env_states)
+            return runner_state, None
 
         # BUILD EXPERT BUFFER
         # collect the number of trajectories we want from each env
         rng, _rng = jax.random.split(rng)
         traj_count = 0
+        sample_metrics = {
+            "returns": 0,
+            "fire_success_rate": 0,
+            "pct_fires_put_out": 0,
+        }
         expert_runner_state = (
             # init state before lax.scan
             traj_count,
@@ -340,11 +349,14 @@ def make_train(config, log_train_env, log_test_env):
             env_state,
             init_obs,
             init_dones,
+            # overwritten each time
+            sample_metrics,
+            sample_viz_env_states,
             # to branch off of later
             _rng,
         )
-        expert_runner_state, (expert_metrics, expert_viz_env_states) = jax.lax.scan(
-            collect_trajectory, expert_runner_state, None, config["TRAJECTORIES_PER_ENV"]
+        expert_runner_state, _ = jax.lax.scan(
+            collect_trajectory, expert_runner_state, None, config["EXPERT_BUFFER_SIZE"]
         )
         # update expert buffer state to final returned buffer from collected trajectories
         expert_buffer_state = expert_runner_state[1]
@@ -353,9 +365,8 @@ def make_train(config, log_train_env, log_test_env):
         # need to wrap in callback for wandb.log to work w/ jit'd func
         def io_callback(metrics):
             wandb.log({k:v.mean() for k, v in metrics.items()})
-
-        # add prefix to expert
-        expert_metrics = {f"expert/{k}": v for k, v in expert_metrics.items()}
+        expert_metrics = expert_runner_state[-3]
+        expert_metrics = {f"expert/{k}": v for k, v in expert_metrics.items()} # add prefix
         jax.debug.callback(io_callback, expert_metrics)
 
         # TRAIN POLICY TO MATCH EXPERT
@@ -426,7 +437,10 @@ def make_train(config, log_train_env, log_test_env):
                 return hidden_state, q_vals
 
         # init training params
-        lr = config['LR']
+        def linear_schedule(count):
+            frac = 1.0 - (count / config["TRAIN_ITERS"])
+            return config["LR"] * frac
+        lr = linear_schedule if config.get('LR_LINEAR_DECAY', False) else config['LR']
         tx = optax.chain(
             optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
             optax.adamw(learning_rate=lr, eps=config['EPS_ADAM'], weight_decay=config['WEIGHT_DECAY_ADAM']),
@@ -440,12 +454,13 @@ def make_train(config, log_train_env, log_test_env):
 
         def _update_step(policy_runner_state, unused):
             """
-            perform one batched update to policy params
+            Perform one batched update to policy params. Collect & log metrics after every update.
+
             NOTE: batched sample is over num_traj, as the RNN needs to sample
             successive states to update the hidden_state correctly
             """
             # unpack runner state
-            update_ct, train_state, expert_buffer_state, rng = policy_runner_state 
+            train_iter, train_state, expert_buffer_state, policy_metrics, policy_viz_env_states, rng = policy_runner_state
 
             # define BC loss
             def _loss_fn(params, init_hstate, learn_traj):
@@ -459,7 +474,7 @@ def make_train(config, log_train_env, log_test_env):
                 # get which actions the agent would've taken given o_t for the full sampled traj
                 obs = {a:learn_traj.obs[a] for a in wrapped_env.training_agents} # ensure to not pass the global state (obs["__all__"]) to the network
                 next_h_state, policy_action_logits = homogeneous_pass(params['agent'], init_hstate, obs, learn_traj.dones)
-                # TODO: does this have the right hidden state?
+                # NOTE: ScannedRNN will carry forward the hidden_state correctly over the sampled learn_traj (which is a batch of full trajectory, not merely transitions)
 
                 # then get expert actions at t
                 expert_actions = {a:learn_traj.actions[a] for a in wrapped_env.training_agents} # ensure to not pass the global state (obs["__all__"]) to the network
@@ -482,7 +497,7 @@ def make_train(config, log_train_env, log_test_env):
 
             # sample a batched trajectory from the expert_buffer and set the time step dim in first axis
             rng, _rng = jax.random.split(rng)
-            # TODO: this is wrong, need to take minibatches over the full buffer technically (see update_epoch() in MAPPO)
+            # NOTE: technically this is wrong, should take minibatches over the full buffer (see update_epoch() in MAPPO) but we have too many expert demos so they must be stored in a flashbax buffer
             learn_traj = expert_buffer.sample(expert_buffer_state, _rng).experience # (batch_size, 1, max_time_steps, ...)
             learn_traj = jax.tree.map(
                 lambda x: jnp.swapaxes(x[:, 0], 0, 1), # remove the dummy sequence dim (1) and swap batch and temporal dims
@@ -498,7 +513,39 @@ def make_train(config, log_train_env, log_test_env):
             loss, grads = grad_fn(train_state.params, init_hs, learn_traj)
             train_state = train_state.apply_gradients(grads=grads)
 
-            # to get policy returns / success rates, need to deploy policy in the env
+            # get updated metrics
+            # NOTE: could also only update metrics on an interval, see config["TEST_INTERVAL"] in QMIX
+            rng, _rng = jax.random.split(rng)
+            policy_metrics, policy_viz_env_states = test_policy(_rng, train_state.params)
+
+            # add prefix to policy_metrics, log metrics + other info
+            logging_metrics = {f"policy/{k}": v for k, v in policy_metrics.items()}
+            logging_metrics["policy/loss"] = loss
+            logging_metrics["policy/train_iter"] = train_iter
+            jax.debug.callback(io_callback, logging_metrics)
+
+
+            # update runner state for next update
+            policy_runner_state = (
+                # updated for next iter
+                train_iter + 1,
+                train_state,
+                # collected from expert
+                expert_buffer_state,
+                # will be discarded, but needs to be in runner state so only latest saved
+                policy_metrics,
+                policy_viz_env_states,
+                # to branch from later
+                rng,
+            )
+            return policy_runner_state, None
+
+        def test_policy(rng, params):
+            """
+            Get policy metrics/viz by deploying policy in the env.
+
+            (See get_greedy_metrics() in QMIX)
+            """
             def _policy_env_step(step_state, unused):
                 """
                 Handles a single step in the env, acting according to the policy. Compatible with jax.lax.scan.
@@ -542,41 +589,31 @@ def make_train(config, log_train_env, log_test_env):
                 "returns": rewards['__all__'].mean(),
                 "fire_success_rate": fire_metrics[0],
                 "pct_fires_put_out": fire_metrics[1],
-                "loss": loss,
-                "updates": update_ct,
             }
 
-            # add prefix to policy_metrics, log
-            policy_metrics = {f"policy/{k}": v for k, v in policy_metrics.items()}
-            jax.debug.callback(io_callback, policy_metrics)
+            return policy_metrics, policy_viz_env_states
 
-            # update runner state for next update
-            policy_runner_state = (
-                # updated for next iter
-                update_ct + 1,
-                train_state,
-                # collected from expert
-                expert_buffer_state,
-                # to branch from later
-                rng,
-            )
-            return policy_runner_state, (policy_metrics, policy_viz_env_states)
+        # init metrics/viz_env_states for lax.scan
+        rng, _rng = jax.random.split(rng)
+        policy_metrics, policy_viz_env_states = test_policy(_rng, train_state.params)
 
         # update the policy NUM_ITERS times
+        train_iter = 0
         rng, _rng = jax.random.split(rng)
-        update_ct = 0
         policy_runner_state = (
-            update_ct,
+            train_iter,
             train_state,
             expert_buffer_state,
+            policy_metrics,
+            policy_viz_env_states,
             _rng,
         )
-        policy_runner_state, (policy_metrics, policy_viz_env_states) = jax.lax.scan(
+        policy_runner_state, _ = jax.lax.scan(
             _update_step, policy_runner_state, None, config["TRAIN_ITERS"]
         )
 
         # finally, return info aggregated across all trajectories
-        return {'expert_runner_state': expert_runner_state, 'expert_metrics': expert_metrics, "expert_viz_env_states": expert_viz_env_states, 'policy_runner_state': policy_runner_state, 'policy_metrics': policy_metrics, "policy_viz_env_states": policy_viz_env_states}
+        return {'expert_runner_state': expert_runner_state, 'expert_metrics': expert_metrics, 'expert_viz_env_states': expert_runner_state[-2], 'policy_runner_state': policy_runner_state, 'policy_metrics': policy_metrics, "policy_viz_env_states": policy_runner_state[-2],}
 
     return train
 
@@ -586,7 +623,7 @@ def visualize_states(save_dir, alg_name, viz_test_env, config, viz_env_states, p
 
     Then build MPEVisualizer and log to Wandb.
     """
-    for seed in range(config["VIZ_NUM_SEEDS"]):
+    for seed in range(config["NUM_SEEDS"]):
         for env in range(config["VIZ_NUM_ENVS"]):
             state_seq = []
             for i in range(config["alg"]["NUM_STEPS"]):
@@ -657,29 +694,18 @@ def main(config):
     train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env)))
     outs = jax.block_until_ready(train_vjit(rngs))
 
-    expert_runner_state = outs["expert_runner_state"]
-    expert_traj_count, expert_buffers, _, _, _, _ = expert_runner_state
+    expert_traj_count = outs["expert_runner_state"][0]
     wandb.log({"expert/traj_count": jnp.sum(expert_traj_count)})
 
-    # shape for each element = (# seeds, # traj, # steps/env, # envs, # entities, DIM)
-    # thus simply take the first traj for visualization purposes
-    expert_viz_env_states = outs["expert_viz_env_states"]
-    expert_viz_env_states = jax.tree_util.tree_map(
-        lambda x: x[:, 0, ...],
-        expert_viz_env_states
-    )
-    policy_viz_env_states = outs["policy_viz_env_states"]
-    policy_viz_env_states = jax.tree_util.tree_map(
-        lambda x: x[:, 0, ...],
-        policy_viz_env_states
-    )
-    
     if config["VISUALIZE_FINAL_POLICY"]:
         save_dir = os.path.join(config['SAVE_PATH'], env_name)
         os.makedirs(save_dir, exist_ok=True)
 
         # visualize both policy and expert
+        policy_viz_env_states = outs["policy_viz_env_states"]
         visualize_states(save_dir, "BC_POLICY", viz_test_env, config, policy_viz_env_states, prefix="policy")
+
+        expert_viz_env_states = outs["expert_viz_env_states"]
         visualize_states(save_dir, "EXPERT_HEURISTIC", viz_test_env, config, expert_viz_env_states, prefix="expert")
 
     # force multiruns to finish correctly
