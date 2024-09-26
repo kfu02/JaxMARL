@@ -705,7 +705,7 @@ def make_train(config, log_train_env, log_test_env):
                 collect_dagger_trajectory, dagger_runner_state, None, config["DAGGER_TRAJECTORIES_PER_ITER"]
             )
             # update for next outer loop
-            traj_count += expert_runner_state[0]
+            traj_count = expert_runner_state[0]
             expert_buffer_state = dagger_runner_state[1]
 
             # Update policy from buffer
@@ -728,7 +728,7 @@ def make_train(config, log_train_env, log_test_env):
                 _update_step, policy_runner_state, None, config["DAGGER_UPDATES_PER_ITER"]
             )
             # update for next outer loop
-            total_updates += policy_runner_state[0]
+            total_updates = policy_runner_state[0]
             train_state = policy_runner_state[1]
 
             # Update beta
