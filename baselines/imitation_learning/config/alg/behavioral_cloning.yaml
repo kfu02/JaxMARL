@@ -1,22 +1,23 @@
-NUM_ENVS: 8
 
 # NOTE: NUM_STEPS (max_steps_per_env) defined by env.yaml
+NUM_ENVS: 4
+# NOTE: must be divisible by NUM_ENVS
 EXPERT_BUFFER_SIZE: 1e4
 # TODO: I believe this batch size is actually 32 trajectories, not 32 steps
-BUFFER_BATCH_SIZE: 32
+BUFFER_BATCH_SIZE: 64
 
 # training
 TRAIN_ITERS: 1e5
 MAX_GRAD_NORM: 25
-LR: 5e-3
+LR: 1e-3
 LR_LINEAR_DECAY: True
 EPS_ADAM: 0.001
-WEIGHT_DECAY_ADAM: 0.1
+WEIGHT_DECAY_ADAM: 0.001
 NUM_TEST_EPISODES: 32
 
 # agent network params
 PARAMETERS_SHARING: True
-AGENT_HIDDEN_DIM: 64 # width of the RNN hidden dim + surrounding MLP layers
+AGENT_HIDDEN_DIM: 128 # width of the RNN hidden dim + surrounding MLP layers
 AGENT_RECURRENT: False
 AGENT_INIT_SCALE: 2.
 AGENT_HYPERAWARE: False

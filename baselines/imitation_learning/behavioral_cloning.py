@@ -228,9 +228,8 @@ def make_train(config, log_train_env, log_test_env):
             _env_sample_step, env_state, None, config["NUM_STEPS"]
         )
         sample_traj_unbatched = jax.tree.map(lambda x: x[:, 0], sample_traj) # remove the NUM_ENV dim
-        expert_buffer_size = config['EXPERT_BUFFER_SIZE']
         expert_buffer = fbx.make_trajectory_buffer(
-            max_length_time_axis=expert_buffer_size//config['NUM_ENVS'],
+            max_length_time_axis=int(config['EXPERT_BUFFER_SIZE']//config['NUM_ENVS']),
             min_length_time_axis=config['BUFFER_BATCH_SIZE'],
             sample_batch_size=config['BUFFER_BATCH_SIZE'],
             add_batch_size=config['NUM_ENVS'],
