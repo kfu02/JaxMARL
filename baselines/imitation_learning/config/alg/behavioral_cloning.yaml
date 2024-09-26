@@ -1,18 +1,26 @@
 
 # NOTE: NUM_STEPS (max_steps_per_env) defined by env.yaml
 NUM_ENVS: 4
-# NOTE: must be divisible by NUM_ENVS
-EXPERT_BUFFER_SIZE: 1e4
-# TODO: I believe this batch size is actually 32 trajectories, not 32 steps
-BUFFER_BATCH_SIZE: 64
 
-# training
-TRAIN_ITERS: 1e5
-MAX_GRAD_NORM: 25
+# data gathering
+EXPERT_BUFFER_SIZE: 10000 # NOTE: must be divisible by NUM_ENVS
+INIT_EXPERT_TRAJ: 100
+DAGGER_ITERATIONS: 10
+DAGGER_TRAJECTORIES_PER_ITER: 1000
+DAGGER_BETA: 0.5
+# DAGGER_BETA_DECAY: 0.99 # TODO: revert linear decay?
+DAGGER_BETA_LINEAR_DECAY: False # True
+
+# update
+DAGGER_UPDATES_PER_ITER: 1000
+UPDATE_BATCH_SIZE: 64
+MAX_GRAD_NORM: 5
 LR: 1e-3
 LR_LINEAR_DECAY: True
 EPS_ADAM: 0.001
 WEIGHT_DECAY_ADAM: 0.001
+
+# eval
 NUM_TEST_EPISODES: 32
 
 # agent network params
