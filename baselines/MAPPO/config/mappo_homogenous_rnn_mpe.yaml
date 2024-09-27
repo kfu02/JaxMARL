@@ -39,13 +39,6 @@ ENV_KWARGS: {
 }
 ANNEAL_LR: True
 
-# Visualization
-VISUALIZE_FINAL_POLICY: True
-# number of seeds/envs to visualize
-VIZ_NUM_ENVS: 1
-VIZ_NUM_SEEDS: 1
-VIZ_SAVE_PATH: "baselines/MAPPO/media"
-
 # WandB Params
 ENTITY: star-lab-gt
 PROJECT: JaxMARL

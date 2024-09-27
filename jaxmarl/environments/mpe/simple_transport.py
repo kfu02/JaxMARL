@@ -271,9 +271,9 @@ class SimpleTransportMPE(SimpleMPE):
         # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
         selected_agents = jax.random.choice(key_a, self.agent_range, shape=(self.num_agents,), replace=False)
         
-        agent_rads = self.agent_rads[selected_agents]
-        agent_accels = self.agent_accels[selected_agents]
-        agent_capacities = self.agent_capacities[selected_agents]
+        agent_rads = jnp.array([0.2, 0.2, 0.2, 0.2]) # self.agent_rads[selected_agents]
+        agent_accels = jnp.array([5, 5, 5, 5]) # self.agent_accels[selected_agents]
+        agent_capacities = jnp.array([[0.0, 1.0], [0.0, 1.0], [0.0, 1.0], [0.0, 1.0]]) # self.agent_capacities[selected_agents]
 
         # if a test distribution is provided and this is a test_env, override capacities
         # NOTE: also add other capabilities here?

@@ -19,12 +19,8 @@ from omegaconf import DictConfig, OmegaConf
 from functools import partial
 import jaxmarl
 from jaxmarl.wrappers.baselines import MPELogWrapper, JaxMARLWrapper
-from jaxmarl.environments.multi_agent_env import MultiAgentEnv
+from jaxmarl.environments.multi_agent_env import MultiAgentEnv, State
 
-from jaxmarl.environments.mpe import MPEVisualizer
-from jaxmarl.environments.mpe.simple import State
-
-import os
 import wandb
 import functools
 import matplotlib.pyplot as plt
@@ -378,13 +374,12 @@ def make_train(config):
                     info,
                 )
                 runner_state = (train_states, env_state, obsv, done_batch, (ac_hstate, cr_hstate), rng)
-                return runner_state, (transition, env_state.env_state)
+                return runner_state, transition
 
             initial_hstates = runner_state[-2]
-            runner_state, outs = jax.lax.scan(
+            runner_state, traj_batch = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_STEPS"]
             )
-            traj_batch, viz_env_state = outs
             
             # CALCULATE ADVANTAGE
             train_states, env_state, last_obs, last_done, hstates, rng = runner_state
@@ -595,7 +590,7 @@ def make_train(config):
             jax.experimental.io_callback(callback, None, metric)
             update_steps = update_steps + 1
             runner_state = (train_states, env_state, last_obs, last_done, hstates, rng)
-            return (runner_state, update_steps), (viz_env_state, metric)
+            return (runner_state, update_steps), metric
 
         rng, _rng = jax.random.split(rng)
         runner_state = (
@@ -606,10 +601,10 @@ def make_train(config):
             (ac_init_hstate, cr_init_hstate),
             _rng,
         )
-        runner_state, outs = jax.lax.scan(
+        runner_state, metric = jax.lax.scan(
             _update_step, (runner_state, 0), None, config["NUM_UPDATES"]
         )
-        return {"runner_state": runner_state, "outs": outs}
+        return {"runner_state": runner_state}
 
     return train
 
@@ -624,50 +619,10 @@ def main(config):
         config=config,
         mode=config["WANDB_MODE"],
     )
-
     rng = jax.random.PRNGKey(config["SEED"])
-    rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config)))
-    outs = jax.block_until_ready(train_vjit(rngs))
-    
-    # rng = jax.random.PRNGKey(config["SEED"])
-    # with jax.disable_jit(False):
-    #     train_jit = jax.jit(make_train(config)) 
-    #     out = train_jit(rng)
-    
-    env_name = config["ENV_NAME"]
-    alg_name = 'mappo'
-    save_dir = os.path.join(config['VIZ_SAVE_PATH'], env_name)
-    os.makedirs(save_dir, exist_ok=True)
-
-    viz_test_env = jaxmarl.make(config["ENV_NAME"], **config['ENV_KWARGS'])
-    if config["VISUALIZE_FINAL_POLICY"]:
-        viz_env_states = outs['outs'][0]
-
-        # build a list of states manually from vectorized seq returned by
-        # make_train() for desired seeds/envs
-        for seed in range(config["VIZ_NUM_SEEDS"]):
-            for env in range(config["VIZ_NUM_ENVS"]):
-                state_seq = []
-                print(viz_env_states.p_pos.shape)
-                for i in range(config["NUM_STEPS"]):
-                    this_step_state = State(
-                        p_pos=viz_env_states.p_pos[-1, seed, i, env, ...],
-                        p_vel=viz_env_states.p_vel[-1, seed, i, env, ...],
-                        c=viz_env_states.c[-1, seed, i, env, ...],
-                        accel=viz_env_states.accel[-1, seed, i, env, ...],
-                        rad=viz_env_states.rad[-1, seed, i, env, ...],
-                        done=viz_env_states.done[-1, seed, i, env, ...],
-                        capacity=viz_env_states.capacity[-1, seed, i, env, ...],
-                        step=i,
-                    )
-                    state_seq.append(this_step_state)
-
-                # save visualization to GIF for wandb display
-                visualizer = MPEVisualizer(viz_test_env, state_seq, env_name=config["ENV_NAME"])
-                video_fpath = f'{save_dir}/{alg_name}-seed-{seed}-rollout.gif'
-                visualizer.animate(video_fpath)
-                wandb.log({f"env-{env}-seed-{seed}-rollout": wandb.Video(video_fpath)})
+    with jax.disable_jit(False):
+        train_jit = jax.jit(make_train(config)) 
+        out = train_jit(rng)
 
     
 if __name__=="__main__":
