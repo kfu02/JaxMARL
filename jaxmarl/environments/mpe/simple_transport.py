@@ -228,10 +228,20 @@ class SimpleTransportMPE(SimpleMPE):
             agent_pos = state.p_pos[agent_i]
             construction_site_pos = state.p_pos[-1]
             dist = jnp.array([jnp.linalg.norm(agent_pos - construction_site_pos)])
-            return jnp.bitwise_and(dist <= state.rad[-1], state.payload[agent_i] > 0) * state.payload[agent_i]      
+            return jnp.bitwise_and(dist <= state.rad[-1], state.payload[agent_i] > 0) * state.payload[agent_i]
+
+        def _dist_to_landmarks(agent_pos):
+            landmark_p_pos = state.p_pos[self.num_agents:]
+            dist_to_landmarks = jnp.linalg.norm(agent_pos - landmark_p_pos, axis=1)
+            return dist_to_landmarks
+
+        def _pos_rew(agent_i):
+            agent_pos = state.p_pos[agent_i]
+            dists = _dist_to_landmarks(agent_pos)
+            return -jnp.min(dists)      
 
         rew = {
-            a: (self.concrete_pickup_reward * _load_concrete_rew(i) + self.lumber_pickup_reward * _load_lumber_rew(i) + self.dropoff_reward * _dropoff_rew(i))[0]
+            a: (self.concrete_pickup_reward * _load_concrete_rew(i) + self.lumber_pickup_reward * _load_lumber_rew(i) + self.dropoff_reward * _dropoff_rew(i))[0] # + 0.01*_pos_rew(i)
             for i, a in enumerate(self.agents)
         }
         return rew

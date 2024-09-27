@@ -69,7 +69,7 @@ class MPEVisualizer(object):
                     state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255
                 )
                 x, y = c.center
-                self.labels.append(self.ax.annotate(f"{state.capacity[i]}", (x+1.25*state.rad[i], y), color="black", ha="left", va="center", size=6))
+                self.labels.append(self.ax.annotate(f"{np.round(state.capacity[i], 2)}", (x+1.25*state.rad[i], y), color="black", ha="left", va="center", size=6))
             else:
                 # otherwise default to filled circles
                 c = Circle(
