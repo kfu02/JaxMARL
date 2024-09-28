@@ -1,11 +1,11 @@
 ENV_NAME: MPE_simple_transport
 ENV_KWARGS:
-  max_steps: 300 # 25
+  max_steps: 128 # 25
 
   # reward shaping
-  lumber_pickup_reward: 1 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
-  concrete_pickup_reward: 1 # reward given to an agent for pickup of concrete if their capacity is > 0.
-  dropoff_reward: 1 # the amount of reward an agent gets for dropping off a resource
+  lumber_pickup_reward: 0.25 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
+  concrete_pickup_reward: 0.25 # reward given to an agent for pickup of concrete if their capacity is > 0.
+  dropoff_reward: 0.75 # the amount of reward an agent gets for dropping off a resource
 
   # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
   capability_aware: True # T/F
@@ -13,9 +13,18 @@ ENV_KWARGS:
   num_agents: 4
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
-  agent_rads: [0.05, 0.05, 0.05, 0.05]
-  agent_accels: [1, 1, 1, 1]
-  agent_capacities: [[0.0, 1.0], [1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+  agent_rads: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+  agent_accels: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+  agent_capacities: [[0.18982161, 0.81017839],
+                     [0.29007672, 0.70992328],
+                     [0.39633298, 0.60366702],
+                     [0.56738995, 0.43261005],
+                     [0.21590217, 0.78409783],
+                     [0.89497965, 0.10502035],
+                     [0.77398882, 0.22601118],
+                     [0.22818673, 0.77181327],
+                     [0.47184828, 0.52815172],
+                     [0.44097518, 0.55902482]]
 
   # agent_rads: [0.05]
   # agent_accels: [1]

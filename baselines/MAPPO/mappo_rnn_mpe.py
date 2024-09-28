@@ -620,9 +620,9 @@ def main(config):
         mode=config["WANDB_MODE"],
     )
     rng = jax.random.PRNGKey(config["SEED"])
-    with jax.disable_jit(False):
-        train_jit = jax.jit(make_train(config)) 
-        out = train_jit(rng)
+    rngs = jax.random.split(rng, config["NUM_SEEDS"])
+    train_vjit = jax.jit(jax.vmap(make_train(config)))
+    outs = jax.block_until_ready(train_vjit(rngs))
 
     
 if __name__=="__main__":
