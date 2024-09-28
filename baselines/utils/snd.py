@@ -71,7 +71,7 @@ def snd(rollouts, hiddens, policy, dim_c):
     dist_matrix_avg = jnp.mean(dist_matrix, axis=(2, 3))  # [n_agents, n_agents]
 
     # compute the final SND metric
-    snd_value = (2 / (n_agents * (n_agents - 1))) * jnp.sum(dist_matrix_avg) / 2# divide by 2 to account for double counting distances
+    snd_value = (2 / (n_agents * (n_agents - 1))) * jnp.sum(dist_matrix_avg) / 2 # divide by 2 to account for double counting distances
 
     return snd_value
 
