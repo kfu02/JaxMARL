@@ -255,9 +255,10 @@ class SimpleTransportMPE(SimpleMPE):
 
         p_pos = jnp.concatenate(
             [
-                jax.random.uniform(
-                    key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
-                ),
+                # jax.random.uniform(
+                #     key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
+                # ),
+                jnp.zeros((self.num_agents, 2)),
                 jnp.array(
                     [
                         [-1.0, 1.0],
@@ -296,3 +297,81 @@ class SimpleTransportMPE(SimpleMPE):
         )
 
         return self.get_obs(state), state
+
+def main():
+    key = jax.random.PRNGKey(0)
+
+    # Initialize environment with default settings
+    env_kwargs = {
+        'agent_rads': [0.2, 0.2, 0.2],
+        'agent_accels': [2, 2, 2],
+        'agent_capacities': [[1.0, 0.0],
+                            [0.0, 1.0],
+                            [0.5, 0.5]]
+    }
+    env = SimpleTransportMPE(
+        num_agents=3,
+        action_type=DISCRETE_ACT,
+        capability_aware=True, 
+        num_capabilities=2,
+        **env_kwargs,
+    )
+    obs, state = env.reset(key)
+
+    assert obs is not None, "reset failed to return obs"
+    assert state is not None, "reset failed to return state"
+
+    # initialize agent just outside of depot
+    concrete_depot_pos = state.p_pos[-3]
+    agent_pos = concrete_depot_pos + jnp.array([0.3 + 0.01, 0.0])
+    state = state.replace(p_pos=state.p_pos.at[0].set(agent_pos))
+    assert (state.p_pos[0] == agent_pos).all(), f"FAIL: expected {agent_pos}, got {state.p_pos[0]}"
+
+    # check that action that doesn't place agent in depot results in no reward
+    actions = {f"agent_{i}": jnp.array([0]) for i in range(env.num_agents)}
+    obs, state, reward, dones, info = env.step_env(key, state, actions)
+    assert reward['agent_0'] == 0, f"FAIL: expected reward for agent 0 to be 0, got {reward['agent_0']}"
+    print("PASS: reward when agent has no payload and doesn't enter depot is 0!")
+
+    # check that payloads and rewards are correct when a agent enters the depot
+    prev_state = state
+    for _ in range(2):
+        actions = {f"agent_{i}": jnp.array([1]) for i in range(env.num_agents)}
+        obs, state, reward, dones, info = env.step_env(key, state, actions)
+    assert (state.p_pos != prev_state.p_pos).any(), f"FAIL: state before and after step with nonzero action match"
+    assert reward['agent_0'] == 0.25, f"FAIL: expected reward for agent 0 to be 0.25, got {reward['agent_0']}"
+    assert reward['agent_1'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_1']}"
+    assert reward['agent_2'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_2']}"
+    assert (state.payload == jnp.array([[1.], [0.], [0.]])).all(), f"FAIL: expected payload to be [[1.], [0.], [0.]], got {state.payload}"
+    print("PASS: rewards and payload update correctly when agent 0 has no payload and enters the depot")
+
+    # check that payloads and rewards don't update if agent enters depot and already has a payload
+    actions = {f"agent_{i}": jnp.array([0.0, 1.0, 0.0, 0.0, 0.0]) for i in range(env.num_agents)}
+    obs, state, reward, dones, info = env.step_env(key, state, actions)
+    assert reward['agent_0'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_0']}"
+    assert reward['agent_1'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_1']}"
+    assert reward['agent_2'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_2']}"
+    assert (state.payload == jnp.array([[1.], [0.], [0.]])).all(), f"FAIL: expected payload to be [[1.], [0.], [0.]], got {state.payload}"
+    print("PASS: rewards and payload update correctly when agent 0 has a payload and enters the depot")
+
+    # check that payloads and rewards update if agent enters constrction site and has a payload
+    obs, state = env.reset(key)
+    site_pos = state.p_pos[-1]
+    agent_pos = site_pos + jnp.array([0.0, 0.3+0.01])
+    for i in range(3):
+        state = state.replace(p_pos=state.p_pos.at[i].set(agent_pos))
+    state = state.replace(payload=jnp.array([[1.], [0.], [0.]]))
+    prev_state = state
+    for _ in range(2):
+        actions = {f"agent_{i}": jnp.array([3]) for i in range(env.num_agents)}
+        obs, state, reward, dones, info = env.step_env(key, state, actions)
+    assert (state.p_pos != prev_state.p_pos).any(), f"FAIL: state before and after step with nonzero action match"
+    assert reward['agent_0'] == 0.75, f"FAIL: expected reward for agent 0 to be 1.0, got {reward['agent_0']}"
+    assert reward['agent_1'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_1']}"
+    assert reward['agent_2'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_2']}"
+    assert (state.payload == jnp.array([[0.], [0.], [0.]])).all(), f"FAIL: expected payload to be [[1.], [0.], [0.]], got {state.payload}"
+    print("PASS: rewards and payload update correctly when agent 0 has payload and enters the site")
+
+
+if __name__ == "__main__":
+    main()
