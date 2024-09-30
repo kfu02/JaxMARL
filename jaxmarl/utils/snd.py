@@ -69,7 +69,7 @@ def snd(rollouts, hiddens, dim_c, params, policy='qmix', agent=None):
         hs = jnp.tile(hs, (1, 1, n_agents, 1))
 
         # trivally set dones to 0
-        dones = jnp.zeros_like(hs)[0]
+        dones = jnp.zeros((hs.shape[0], hs.shape[1], hs.shape[2]))
 
         def apply_policy_per_timestep(cary, t):
             return carry, policy(params, hs[t, ...], obs[t, ...], dones[t, ...], agent=agent)
