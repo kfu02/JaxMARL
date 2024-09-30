@@ -33,11 +33,12 @@ class SimpleTransportMPE(SimpleMPE):
         vel_dim = 2  # for ego agent
         material_depot_dim = 2 * 2 # 2 materials, 2 positions
         construction_site_dim = 2
+        quota_dim = 1
         payload_dim = 1
 
         # initialize observation space for each agent
         observation_spaces = {
-            i: Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + material_depot_dim + construction_site_dim + payload_dim + self.dim_capabilities))
+            i: Box(-jnp.inf, jnp.inf, (pos_dim + vel_dim + material_depot_dim + construction_site_dim + payload_dim + quota_dim + self.dim_capabilities))
             for i in agents
         }
 
@@ -97,7 +98,7 @@ class SimpleTransportMPE(SimpleMPE):
             step=state.step + 1,
         )
 
-        reward = self.rewards(state)
+        reward, state = self.rewards(state)
 
         #######################################################################################
         # Start modified step
@@ -187,6 +188,7 @@ class SimpleTransportMPE(SimpleMPE):
                 rel_other_pos.flatten(),  # N-1, 2
                 ego_vel.flatten(),  # 2
                 rel_landmark_p_pos.flatten(), # 2, 2
+                state.site_quota.flatten(), # 1
                 payload.flatten(), # 1
                 # NOTE: caps must go last for hypernet logic
                 ego_cap.flatten(),  # n_cap
@@ -210,7 +212,8 @@ class SimpleTransportMPE(SimpleMPE):
             agent_pos = state.p_pos[agent_i]
             concrete_depot_pos = state.p_pos[-3]
             dist = jnp.array([jnp.linalg.norm(agent_pos - concrete_depot_pos)])
-            return jnp.bitwise_and(dist <= state.rad[-3], state.payload[agent_i] == 0)
+            able_to_load = jnp.bitwise_and(state.payload[agent_i] == 0, state.capacity[agent_i][0] > 0)
+            return jnp.bitwise_and(dist <= state.rad[-3], able_to_load)
         
         def _load_lumber_rew(agent_i):
             """
@@ -219,7 +222,8 @@ class SimpleTransportMPE(SimpleMPE):
             agent_pos = state.p_pos[agent_i]
             lumber_depot_pos = state.p_pos[-2]
             dist = jnp.array([jnp.linalg.norm(agent_pos - lumber_depot_pos)])
-            return jnp.bitwise_and(dist <= state.rad[-2], state.payload[agent_i] == 0)
+            able_to_load = jnp.bitwise_and(state.payload[agent_i] == 0, state.capacity[agent_i][1] > 0)
+            return jnp.bitwise_and(dist <= state.rad[-2], able_to_load)
 
         def _dropoff_rew(agent_i):
             """
@@ -238,13 +242,25 @@ class SimpleTransportMPE(SimpleMPE):
         def _pos_rew(agent_i):
             agent_pos = state.p_pos[agent_i]
             dists = _dist_to_landmarks(agent_pos)
-            return -jnp.min(dists)      
+            return -jnp.min(dists)
 
         rew = {
-            a: (self.concrete_pickup_reward * _load_concrete_rew(i) + self.lumber_pickup_reward * _load_lumber_rew(i) + self.dropoff_reward * _dropoff_rew(i))[0] # + 0.01*_pos_rew(i)
+            a: (self.concrete_pickup_reward * _load_concrete_rew(i) +
+                self.lumber_pickup_reward * _load_lumber_rew(i) +
+                self.dropoff_reward * _dropoff_rew(i))[0]
             for i, a in enumerate(self.agents)
         }
-        return rew
+
+        # get progress towards quota
+        quota_step = jnp.sum(jnp.array([self.dropoff_reward * _dropoff_rew(i) for i in range(self.num_agents)]))
+        quota_new = state.site_quota + quota_step
+        state = state.replace(site_quota=quota_new)
+
+        # if quota is met, stop applying penalty, otherwise, apply penalty
+        quota_rew = jnp.where(quota_new < 0, -0.005, 0)
+        rew = {a: rew[a] + quota_rew for a in rew}
+
+        return rew, state
     
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, State]:
         """
@@ -261,9 +277,9 @@ class SimpleTransportMPE(SimpleMPE):
                 jnp.zeros((self.num_agents, 2)),
                 jnp.array(
                     [
-                        [-1.0, 1.0],
-                        [1.0, 1.0],
-                        [0.0, -1.0],
+                        [-0.5, 0.5],
+                        [0.5, 0.5],
+                        [0.0, -0.5],
                     ]
                 ),
             ]
@@ -281,6 +297,13 @@ class SimpleTransportMPE(SimpleMPE):
         if self.test_env_flag and self.test_team is not None:
             agent_capacities = jnp.array(self.test_team["agent_capacities"])
 
+        # initialize with empty payload or a payload corresponding to capacity
+        # payload = jnp.where(
+        #     jax.random.uniform(key_l, (self.num_agents, 1)) < 0.5, 
+        #     0, 
+        #     jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
+        # )
+
         state = State(
             p_pos=p_pos,
             p_vel=jnp.zeros((self.num_entities, self.dim_p)),
@@ -294,6 +317,7 @@ class SimpleTransportMPE(SimpleMPE):
             step=0,
             payload=jnp.zeros((self.num_agents, 1)),
             capacity=agent_capacities,
+            site_quota=jnp.array(self.site_quota)
         )
 
         return self.get_obs(state), state
@@ -307,7 +331,8 @@ def main():
         'agent_accels': [2, 2, 2],
         'agent_capacities': [[1.0, 0.0],
                             [0.0, 1.0],
-                            [0.5, 0.5]]
+                            [0.5, 0.5]],
+        'site_quota': 10
     }
     env = SimpleTransportMPE(
         num_agents=3,
@@ -320,6 +345,9 @@ def main():
 
     assert obs is not None, "reset failed to return obs"
     assert state is not None, "reset failed to return state"
+
+    # ignore quota reward for now
+    state = state.replace(site_quota=jnp.array([0]))
 
     # initialize agent just outside of depot
     concrete_depot_pos = state.p_pos[-3]
@@ -356,6 +384,7 @@ def main():
 
     # check that payloads and rewards update if agent enters constrction site and has a payload
     obs, state = env.reset(key)
+    state = state.replace(site_quota=jnp.array([0]))
     site_pos = state.p_pos[-1]
     agent_pos = site_pos + jnp.array([0.0, 0.3+0.01])
     for i in range(3):
@@ -366,7 +395,7 @@ def main():
         actions = {f"agent_{i}": jnp.array([3]) for i in range(env.num_agents)}
         obs, state, reward, dones, info = env.step_env(key, state, actions)
     assert (state.p_pos != prev_state.p_pos).any(), f"FAIL: state before and after step with nonzero action match"
-    assert reward['agent_0'] == 0.75, f"FAIL: expected reward for agent 0 to be 1.0, got {reward['agent_0']}"
+    assert reward['agent_0'] == 0.75, f"FAIL: expected reward for agent 0 to be 0.75, got {reward['agent_0']}"
     assert reward['agent_1'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_1']}"
     assert reward['agent_2'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_2']}"
     assert (state.payload == jnp.array([[0.], [0.], [0.]])).all(), f"FAIL: expected payload to be [[1.], [0.], [0.]], got {state.payload}"
