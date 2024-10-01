@@ -52,7 +52,7 @@ def expert_heuristic_simple_fire(valid_set_partitions, num_landmarks, obs_dict):
 
     def solve_one_env(obs):
         """
-        For all agents in one env, obs will take the form [n_agents, obs_dim]. Solve the env for those agents.
+        For all agents in one env, at this timestep, obs will take the form [n_agents, obs_dim]. Provide the best action for each agent.
 
         Note task allocation only takes info from the first agent, as everything is fully observable from that POV.
         """
@@ -116,17 +116,21 @@ def expert_heuristic_simple_fire(valid_set_partitions, num_landmarks, obs_dict):
         all_best_actions = jax.vmap(best_action_for_agent)(jnp.arange(num_agents))
         return all_best_actions
 
-    # stack obs to be per-env
-    all_obs = jnp.stack(list(obs_dict.values())) # [n_agents, ?, n_envs, obs_dim]
-    all_obs = all_obs.squeeze(1) # remove extra unknown dim
+    # stack all agent obs together
+    obs_by_ts = jnp.stack(list(obs_dict.values())) # [n_agents, TS, n_envs, obs_dim]
+    n_agents, timesteps, n_envs, obs_dim = obs_by_ts.shape
+    obs_by_ts = jnp.reshape(obs_by_ts, (n_agents, timesteps * n_envs, obs_dim)) # [n_agents, TS*n_envs, obs_dim]
 
-    # iterate over n_envs
-    all_acts = jax.vmap(solve_one_env, in_axes=[1])(all_obs) # [n_envs, n_agents] (act_dim=1, squeezed out)
+    # iterate over timesteps
+    all_acts = jax.vmap(solve_one_env, in_axes=[1])(obs_by_ts) # [TS*n_envs, n_agents] (act_dim=1, squeezed out)
+    # then reshape to be [n_agents, TS, n_envs] (act_dim = 1)
+    all_acts = jnp.swapaxes(all_acts, 0, 1)
+    all_acts = jnp.reshape(all_acts, (n_agents, timesteps, n_envs))
 
-    # then separate back into per-agent actions
+    # then separate back into per-agent actions, matching original obs
     actions = {}
     for i, agent_name in enumerate(obs_dict.keys()):
-        actions[agent_name] = all_acts[:, i]
+        actions[agent_name] = all_acts[i, ...]
 
     return actions
 
@@ -269,6 +273,7 @@ def make_train(config, log_train_env, log_test_env):
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
 
                 actions = expert_heuristic_simple_fire(valid_set_partitions, log_train_env.num_landmarks, obs_)
+                actions = jax.tree.map(lambda x: x.squeeze(0), actions) # rm dummy time_step dim
 
                 # step in env with action
                 obs, env_state, rewards, dones, infos = wrapped_env.batch_step(key_s, env_state, actions)
@@ -281,7 +286,6 @@ def make_train(config, log_train_env, log_test_env):
 
             # prepare the step state and collect the episode trajectory
             rng, _rng = jax.random.split(rng)
-
             step_state = (
                 env_state,
                 init_obs,
@@ -509,7 +513,8 @@ def make_train(config, log_train_env, log_test_env):
                 return step_state, (transition, viz_env_state)
 
             # Run DAgger collection
-            step_state = (env_state, init_obs, init_dones, ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(wrapped_env.training_agents)*config["NUM_ENVS"]), rng)
+            rng, _rng = jax.random.split(rng)
+            step_state = (env_state, init_obs, init_dones, ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(wrapped_env.training_agents)*config["NUM_ENVS"]), _rng)
             step_state, (traj_batch, viz_env_states) = jax.lax.scan(
                 _dagger_env_step, step_state, None, config["NUM_STEPS"]
             )
@@ -561,27 +566,27 @@ def make_train(config, log_train_env, log_test_env):
                 with QMIX training. However, here I abuse "q_vals" to actually
                 be action logits. In the discrete case there is no difference.
                 """
-                # get which actions the agent would've taken given o_t for the full sampled traj
                 obs = {a:learn_traj.obs[a] for a in wrapped_env.training_agents} # ensure to not pass the global state (obs["__all__"]) to the network
-                next_h_state, policy_action_logits = homogeneous_pass(params['agent'], init_hstate, obs, learn_traj.dones)
-                # NOTE: ScannedRNN will carry forward the hidden_state correctly over the sampled learn_traj (which is a batch of full trajectory, not merely transitions)
+                _, policy_action_logits = homogeneous_pass(params['agent'], init_hstate, obs, learn_traj.dones) # [TS, n_envs, act_dim]
+                # NOTE: I don't think the hstate is being passed fwd in time correctly here, but this is what QMIX has...?
 
                 # then get expert actions at t
+                # [TS, n_envs] (act dim squeezed out as these are indices)
                 expert_actions = {a:learn_traj.actions[a] for a in wrapped_env.training_agents} # ensure to not pass the global state (obs["__all__"]) to the network
 
                 # compute cross-entropy loss over policy actions vs expert action labels 
+                # preserving TS/batch dims is fine!
                 if config["PARAMETERS_SHARING"]:
                     # if shared-param, merge all agents
-                    all_policy_logits = jnp.concatenate([*policy_action_logits.values()]) # [env_step * n_agents, batch, n_act]
-                    all_expert_actions = jnp.concatenate([*expert_actions.values()])
-                    # then flatten across envs
-                    # [env_step * n_agents * batch, n_act]
-                    all_policy_logits = jnp.reshape(all_policy_logits, (all_policy_logits.shape[0] * all_policy_logits.shape[1], all_policy_logits.shape[-1]))
-                    all_expert_actions = jnp.reshape(all_expert_actions, (all_expert_actions.shape[0] * all_expert_actions.shape[1]))
-                    loss = optax.softmax_cross_entropy_with_integer_labels(all_policy_logits, jax.lax.stop_gradient(all_expert_actions)) # (and don't backprop through expert labels)
-                    
-                    # return mean loss over batch
-                    return jnp.mean(loss)
+                    all_policy_logits = jnp.stack(list(policy_action_logits.values())) # [n_agents, TS, n_envs, act_dim]
+                    all_expert_actions = jnp.stack(list(expert_actions.values())) # [n_agents, TS, n_envs]
+                    # convert expert actions to one-hot
+                    all_expert_logits = jax.nn.one_hot(all_expert_actions, all_policy_logits.shape[-1])
+
+                    # then compute MSE loss between policy and expert logits
+                    # NOTE: I thought this should be softmax_cross_entropy()? but it seems like robomimic BC baseline uses MSE
+                    loss = jnp.mean((all_policy_logits - jax.lax.stop_gradient(all_expert_logits))**2)
+                    return loss
                 else:
                     exit("NON-HOMOGENEOUS POLICY LOSS NOT IMPLEMENTED")
 
@@ -605,7 +610,7 @@ def make_train(config, log_train_env, log_test_env):
             # get updated metrics
             # NOTE: could also only update metrics on an interval, see config["TEST_INTERVAL"] in QMIX
             rng, _rng = jax.random.split(rng)
-            policy_metrics, policy_viz_env_states = test_policy(_rng, train_state.params)
+            policy_metrics, policy_viz_env_states = test_policy(_rng, train_state.params["agent"])
 
             # add prefix to policy_metrics, log metrics + other info
             logging_metrics = {f"policy/{k}": v for k, v in policy_metrics.items()}
@@ -630,7 +635,7 @@ def make_train(config, log_train_env, log_test_env):
 
         # create test routine for learned policy
         # (this is called within update_step, but must be defined here for init)
-        def test_policy(rng, params):
+        def test_policy(rng, policy_params):
             """
             Get policy metrics/viz by deploying policy in the env.
 
@@ -640,16 +645,16 @@ def make_train(config, log_train_env, log_test_env):
                 """
                 Handles a single step in the env, acting according to the policy. Compatible with jax.lax.scan.
                 """
-                env_state, last_obs, last_dones, last_h, rng = step_state
+                policy_params, env_state, last_obs, last_dones, last_h, rng = step_state
 
                 # prepare rngs for actions and step
-                rng, key_a, key_s = jax.random.split(rng, 3)
+                rng, key_s = jax.random.split(rng)
 
                 # select action from policy
                 obs_   = {a:last_obs[a] for a in test_env.training_agents} # ensure to not pass the global state (obs["__all__"]) to the network
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_) # add a dummy time_step dimension to the agent input
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones) # add a dummy time_step dimension to the agent input
-                h_state, policy_action_logits = homogeneous_pass(train_state.params['agent'], last_h, obs_, dones_, train=False)
+                h_state, policy_action_logits = homogeneous_pass(policy_params, last_h, obs_, dones_)
                 actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), policy_action_logits, test_env.valid_actions) # greedy-select most likely action
 
                 # step in env with action
@@ -657,7 +662,7 @@ def make_train(config, log_train_env, log_test_env):
                 transition = Transition(last_obs, actions, rewards, dones, infos) # last_obs is right (at last_obs, take this action)
 
                 # update step_state for next step, return collected transition/viz_env_state to be aggregated
-                step_state = (env_state, obs, dones, h_state, rng)
+                step_state = (policy_params, env_state, obs, dones, h_state, rng)
                 viz_env_state = env_state.env_state
                 return step_state, (transition, viz_env_state)
 
@@ -666,13 +671,13 @@ def make_train(config, log_train_env, log_test_env):
             init_obs, env_state = test_env.batch_reset(_rng)
             init_dones = {agent:jnp.zeros((config["NUM_TEST_EPISODES"]), dtype=bool) for agent in test_env.training_agents+['__all__']}
             init_hs = ScannedRNN.initialize_carry(config['AGENT_HIDDEN_DIM'], len(test_env.training_agents)*config["NUM_TEST_EPISODES"]) # (n_agents*NUM_TEST_EPISODES, hs_size)
-            policy_step_state = (env_state, init_obs, init_dones, init_hs, rng)
+            policy_step_state = (policy_params, env_state, init_obs, init_dones, init_hs, rng)
             policy_step_state, (policy_traj_batch, policy_viz_env_states) = jax.lax.scan(
                 _policy_env_step, policy_step_state, None, config["NUM_STEPS"]
             )
             
             # compute metrics for this trajectory
-            final_env_state = policy_step_state[0].env_state
+            final_env_state = policy_step_state[1].env_state
             fire_metrics = fire_env_metrics(final_env_state)
             rewards = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), policy_traj_batch.rewards)
             policy_metrics = {
@@ -683,9 +688,11 @@ def make_train(config, log_train_env, log_test_env):
 
             return policy_metrics, policy_viz_env_states
 
+        jax.debug.print("Starting main loop of DAgger...")
         # DAgger main loop
         total_updates = 0
         for dagger_iter in range(config['DAGGER_ITERATIONS']):
+            """
             # Collect new data, add it to buffer
             rng, _rng = jax.random.split(rng)
             init_obs, env_state = wrapped_env.batch_reset(_rng)
@@ -707,10 +714,11 @@ def make_train(config, log_train_env, log_test_env):
             # update for next outer loop
             traj_count = expert_runner_state[0]
             expert_buffer_state = dagger_runner_state[1]
+            """
 
-            # Update policy from buffer
+            # Update policy from buffer & test
             rng, _rng = jax.random.split(rng)
-            policy_metrics, policy_viz_env_states = test_policy(_rng, train_state.params) # init metrics/viz_env_states for lax.scan
+            policy_metrics, policy_viz_env_states = test_policy(_rng, train_state.params["agent"]) # init metrics/viz_env_states for lax.scan
             rng, _rng = jax.random.split(rng)
             policy_runner_state = (
                 # init
