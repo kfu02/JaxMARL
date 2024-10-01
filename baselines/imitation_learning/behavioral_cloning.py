@@ -422,7 +422,7 @@ def make_train(config, log_train_env, log_test_env):
 
         # define batched computation of policy
         if config["PARAMETERS_SHARING"]:
-            def homogeneous_pass(params, hidden_state, obs, dones, train=True):
+            def homogeneous_pass(params, hidden_state, obs, dones):
                 # concatenate agents and parallel envs to process them in one batch
                 agents, flatten_agents_obs = zip(*obs.items())
                 original_shape = flatten_agents_obs[0].shape # assumes obs shape is the same for all agents
@@ -430,7 +430,7 @@ def make_train(config, log_train_env, log_test_env):
                     jnp.concatenate(flatten_agents_obs, axis=1), # (time_step, n_agents*n_envs, obs_size)
                     jnp.concatenate([dones[agent] for agent in agents], axis=1), # ensure to not pass other keys (like __all__)
                 )
-                hidden_state, q_vals = agent.apply(params, hidden_state, batched_input, train=train)
+                hidden_state, q_vals = agent.apply(params, hidden_state, batched_input)
                 q_vals = q_vals.reshape(original_shape[0], len(agents), *original_shape[1:-1], -1) # (time_steps, n_agents, n_envs, action_dim)
                 q_vals = {a:q_vals[:,i] for i,a in enumerate(agents)}
                 return hidden_state, q_vals
@@ -485,7 +485,7 @@ def make_train(config, log_train_env, log_test_env):
                 obs_ = {a: last_obs[a] for a in log_train_env.agents}
                 obs_ = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
-                h_state, policy_action_logits = homogeneous_pass(train_state.params['agent'], last_h, obs_, dones_, train=False)
+                h_state, policy_action_logits = homogeneous_pass(train_state.params['agent'], last_h, obs_, dones_)
                 policy_actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), policy_action_logits, wrapped_env.valid_actions)
 
                 expert_actions = expert_heuristic_simple_fire(valid_set_partitions, log_train_env.num_landmarks, obs_)

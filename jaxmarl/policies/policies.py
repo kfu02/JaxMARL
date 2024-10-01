@@ -49,7 +49,7 @@ class AgentMLP(nn.Module):
     init_scale: float
 
     @nn.compact
-    def __call__(self, unused, x, train=False):
+    def __call__(self, unused, x):
         obs, dones = x
 
         embedding = nn.relu(nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs))
@@ -70,7 +70,7 @@ class AgentHyperMLP(nn.Module):
     dim_capabilities: int # per team
 
     @nn.compact
-    def __call__(self, unused, x, train=False):
+    def __call__(self, unused, x):
         orig_obs, dones = x
 
         # separate obs into capabilities and observations
@@ -138,7 +138,7 @@ class AgentRNN(nn.Module):
     init_scale: float
 
     @nn.compact
-    def __call__(self, hidden, x, train=False):
+    def __call__(self, hidden, x):
         obs, dones = x
 
         # NOTE: SimpleSpread gives obs as obs+cap (concatenated) and zeroes out
@@ -165,7 +165,7 @@ class AgentHyperRNN(nn.Module):
     dim_capabilities: int # per team
 
     @nn.compact
-    def __call__(self, hidden, x, train=True):
+    def __call__(self, hidden, x):
         orig_obs, dones = x
 
         # separate obs into capabilities and observations
