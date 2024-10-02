@@ -229,7 +229,8 @@ class SimpleTransportMPE(SimpleMPE):
             agent_pos = state.p_pos[agent_i]
             concrete_depot_pos = state.p_pos[-3]
             dist = jnp.array([jnp.linalg.norm(agent_pos - concrete_depot_pos)])
-            able_to_load = jnp.bitwise_and(state.payload[agent_i][0] == 0, state.capacity[agent_i][0] > 0)
+            able_to_load = jnp.bitwise_and(state.payload[agent_i][0] == 0, state.payload[agent_i][1] == 0)
+            able_to_load = jnp.bitwise_and(able_to_load, state.capacity[agent_i][0] > 0)
             return jnp.bitwise_and(dist <= state.rad[-3], able_to_load)
         
         def _load_lumber_rew(agent_i):
@@ -239,7 +240,8 @@ class SimpleTransportMPE(SimpleMPE):
             agent_pos = state.p_pos[agent_i]
             lumber_depot_pos = state.p_pos[-2]
             dist = jnp.array([jnp.linalg.norm(agent_pos - lumber_depot_pos)])
-            able_to_load = jnp.bitwise_and(state.payload[agent_i][1] == 0, state.capacity[agent_i][1] > 0)
+            able_to_load = jnp.bitwise_and(state.payload[agent_i][0] == 0, state.payload[agent_i][1] == 0)
+            able_to_load = jnp.bitwise_and(able_to_load, state.capacity[agent_i][1] > 0)
             return jnp.bitwise_and(dist <= state.rad[-2], able_to_load)
 
         def _dropoff_rew(agent_i):
@@ -278,7 +280,7 @@ class SimpleTransportMPE(SimpleMPE):
         quota_new = state.site_quota + quota_step
 
         # # if quota is met, stop applying penalty, otherwise, apply penalty
-        quota_rew = jnp.sum(jnp.where(quota_new < 0, self.quota_penalty, 0), axis=0)
+        quota_rew = jnp.mean(jnp.where(quota_new < 0, self.quota_penalty, 0), axis=0)
         rew = {a: rew[a] + quota_rew for a in rew}
 
         return rew

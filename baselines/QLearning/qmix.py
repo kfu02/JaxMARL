@@ -723,6 +723,7 @@ def main(config):
                             rad=viz_env_states.rad[seed, i, env, ...],
                             done=viz_env_states.done[seed, i, env, ...],
                             capacity=viz_env_states.capacity[seed, i, env, ...],
+                            site_quota=viz_env_states.site_quota[seed, i, env, ...],
                             step=i,
                         )
                         state_seq.append(this_step_state)
