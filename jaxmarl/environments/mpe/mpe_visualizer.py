@@ -69,7 +69,7 @@ class MPEVisualizer(object):
                     state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255
                 )
                 x, y = c.center
-                self.labels.append(self.ax.annotate(f"{np.round(state.capacity[i], 2)}", (x+1.25*state.rad[i], y), color="black", ha="left", va="center", size=6))
+                self.labels.append(self.ax.annotate(f"{np.round(state.capacity[i], decimals=2)}", (x+1.25*state.rad[i], y), color="black", ha="left", va="center", size=6))
             else:
                 # otherwise default to filled circles
                 c = Circle(
@@ -80,12 +80,26 @@ class MPEVisualizer(object):
             self.entity_artists.append(c)
 
         for j in range(self.env.num_landmarks):
-            if self.env_name == "MPE_simple_fire" or self.env_name == "MPE_simple_transport":
+            if self.env_name == "MPE_simple_fire":
                 # in FireEnv, draw agents as empty circles so they can be seen if they overlap
                 i = j + self.env.num_agents
                 c = Circle(
                     state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
                 )
+            elif self.env_name == "MPE_simple_transport":
+                i = j + self.env.num_agents
+                c = Circle(
+                    state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255, fill=False, facecolor='none',
+                )
+                x, y = c.center
+                if j == 2:
+                    self.labels.append(
+                        self.ax.annotate(f"{np.round(state.site_quota, decimals=2)}",
+                        (x, y),
+                        color="black", ha="left", va="center", size=8)
+                    )
+                else:
+                    self.labels.append(None)
             else:
                 # otherwise default to filled circles
                 i = j + self.env.num_agents
@@ -116,9 +130,12 @@ class MPEVisualizer(object):
             c.center = state.p_pos[i]
 
         for i in range(len(self.labels)):
-            x, y = self.entity_artists[i].center
-            self.labels[i].set_x(x+1.25*state.rad[i])
-            self.labels[i].set_y(y)
+            if self.labels[i]:
+                x, y = self.entity_artists[i].center
+                self.labels[i].set_x(x+1.25*state.rad[i])
+                self.labels[i].set_y(y)
+            if self.env_name == "MPE_simple_transport" and i == len(self.labels)-1:
+                self.labels[i].set_text(f"{np.round(state.site_quota, decimals=2)}")
             
         self.step_counter.set_text(f"Step: {state.step}")
         

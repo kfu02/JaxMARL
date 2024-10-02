@@ -30,9 +30,9 @@ class State:
     goal: int = None  # index of target landmark, used in: SimpleSpeakerListenerMPE, SimpleReferenceMPE, SimplePushMPE, SimpleAdversaryMPE
     accel: chex.Array = None # [n, 1] representing accel applied to actions
     rad: chex.Array = None # [n, 1] representing rad of each entity (first agents, then landmarks)
-    payload: chex.Array = None # [n, 1] representing agent's current payload, used in: SimpleTransport
-    capacity: chex.Array = None # [n, 2] representing agent's carrying capacity, used in : SimpleTransport
-    site_quota: chex.Array = None # [1] representing remaining materials needed to meet quota
+    payload: chex.Array = None # [n, 2] representing agent's current payload, used in: SimpleTransport
+    capacity: chex.Array = None # [n, 2] representing agent's carrying capacity, used in: SimpleTransport
+    site_quota: chex.Array = None # [2] representing remaining materials needed to meet quota, used in: SimpleTransport
 
 class SimpleMPE(MultiAgentEnv):
     def __init__(
@@ -140,10 +140,14 @@ class SimpleMPE(MultiAgentEnv):
         if "agent_capacities" in kwargs:
             self.agent_capacities = kwargs["agent_capacities"]
             self.agent_capacities = jnp.array(self.agent_capacities)
+        else:
+            self.agent_capacities = None
 
         if "site_quota" in kwargs:
-            self.site_quota = -kwargs["site_quota"]
-            self.site_quota = jnp.array(self.site_quota)
+            self.site_quota = kwargs["site_quota"]
+            self.site_quota = -jnp.array(self.site_quota)
+        else:
+            self.site_quota = None
 
         if "moveable" in kwargs:
             self.moveable = kwargs["moveable"]
