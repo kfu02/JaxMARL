@@ -49,6 +49,7 @@ class SimpleTransportMPE(SimpleMPE):
         self.concrete_pickup_reward = kwargs.get("concrete_pickup_reward", 0.25)
         self.lumber_pickup_reward = kwargs.get("lumber_pickup_reward", 0.25)
         self.dropoff_reward = kwargs.get("dropoff_reward", 0.75)
+        self.quota_penalty = kwargs.get("quota_penalty", -0.005)
 
         # no collisions in this env
         collide = jnp.concatenate(
@@ -249,7 +250,9 @@ class SimpleTransportMPE(SimpleMPE):
             construction_site_pos = state.p_pos[-1]
             dist = jnp.array([jnp.linalg.norm(agent_pos - construction_site_pos)])
             able_to_dropoff = jnp.bitwise_and(dist <= state.rad[-1], state.site_quota < 0)
-            return jnp.sum(jnp.bitwise_and(able_to_dropoff, state.payload[agent_i] > 0) * state.payload[agent_i], axis=-1)
+
+            # Return both summed and unsummed value for quota reward logic
+            return jnp.sum(jnp.bitwise_and(able_to_dropoff, state.payload[agent_i] > 0), axis=-1), jnp.bitwise_and(able_to_dropoff, state.payload[agent_i] > 0)
 
         def _dist_to_landmarks(agent_pos):
             landmark_p_pos = state.p_pos[self.num_agents:]
@@ -264,19 +267,19 @@ class SimpleTransportMPE(SimpleMPE):
         rew = {
             a: (self.concrete_pickup_reward * _load_concrete_rew(i) +
                 self.lumber_pickup_reward * _load_lumber_rew(i) +
-                self.dropoff_reward * _dropoff_rew(i)
+                self.dropoff_reward * _dropoff_rew(i)[0]
                 # 0.005 * _pos_rew(i)
                 )[0]
             for i, a in enumerate(self.agents)
         }
 
         # # get progress towards quota
-        # quota_step = jnp.sum(jnp.array([self.dropoff_reward * _dropoff_rew(i) for i in range(self.num_agents)]))
-        # quota_new = state.site_quota + quota_step
+        quota_step = jnp.sum(jnp.array([self.dropoff_reward * _dropoff_rew(i)[1] for i in range(self.num_agents)]), axis=0)
+        quota_new = state.site_quota + quota_step
 
         # # if quota is met, stop applying penalty, otherwise, apply penalty
-        # quota_rew = jnp.where(quota_new < 0, -0.005, 0)
-        # rew = {a: rew[a] + quota_rew for a in rew}
+        quota_rew = jnp.sum(jnp.where(quota_new < 0, self.quota_penalty, 0), axis=0)
+        rew = {a: rew[a] + quota_rew for a in rew}
 
         return rew
     
@@ -350,7 +353,8 @@ def main():
         'agent_capacities': [[1.0, 0.0],
                             [0.0, 1.0],
                             [0.5, 0.5]],
-        'site_quota': [5., 5.]
+        'site_quota': [5., 5.],
+        'quota_penalty': -0.005
     }
     env = SimpleTransportMPE(
         num_agents=3,
@@ -373,7 +377,7 @@ def main():
     # check that action that doesn't place agent in depot results in no reward
     actions = {f"agent_{i}": jnp.array([0]) for i in range(env.num_agents)}
     obs, state, reward, dones, info = env.step_env(key, state, actions)
-    assert reward['agent_0'] == 0, f"FAIL: expected reward for agent 0 to be 0, got {reward['agent_0']}"
+    assert reward['agent_0'] == 2*env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 0 to be {2*env_kwargs['quota_penalty']}, got {reward['agent_0']}"
     print("PASS: reward when agent has no payload and doesn't enter depot is 0!")
 
     # check that payloads and rewards are correct when a agent enters the depot
@@ -383,9 +387,9 @@ def main():
         obs, state, reward, dones, info = env.step_env(key, state, actions)
     expected_payload = jnp.array([[1., 0.], [0., 0.], [0., 0.]])
     assert (state.p_pos != prev_state.p_pos).any(), f"FAIL: state before and after step with nonzero action match"
-    assert reward['agent_0'] == 0.25, f"FAIL: expected reward for agent 0 to be 0.25, got {reward['agent_0']}"
-    assert reward['agent_1'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_1']}"
-    assert reward['agent_2'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_2']}"
+    assert reward['agent_0'] == 0.25 + 2*env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 0 to be {0.25 - 2*env_kwargs['quota_penalty']}, got {reward['agent_0']}"
+    assert reward['agent_1'] == 2*env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 1 to be {2*env_kwargs['quota_penalty']}, got {reward['agent_1']}"
+    assert reward['agent_2'] == 2*env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 2 to be {2*env_kwargs['quota_penalty']}, got {reward['agent_2']}"
     assert (state.payload == expected_payload).all(), f"FAIL: expected payload to be{expected_payload}, got {state.payload}"
     print("PASS: rewards and payload update correctly when agent 0 has no payload and enters the depot")
 
@@ -393,9 +397,9 @@ def main():
     actions = {f"agent_{i}": jnp.array([0.0, 1.0, 0.0, 0.0, 0.0]) for i in range(env.num_agents)}
     obs, state, reward, dones, info = env.step_env(key, state, actions)
     expected_payload = jnp.array([[1., 0.], [0., 0.], [0., 0.]])
-    assert reward['agent_0'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_0']}"
-    assert reward['agent_1'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_1']}"
-    assert reward['agent_2'] == 0.0, f"FAIL: expected reward for agent 0 to be 0.0, got {reward['agent_2']}"
+    assert reward['agent_0'] == 2*env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 0 to be {2*env_kwargs['quota_penalty']}, got {reward['agent_0']}"
+    assert reward['agent_1'] == 2*env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 1 to be {2*env_kwargs['quota_penalty']}, got {reward['agent_1']}"
+    assert reward['agent_2'] == 2*env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 2 to be {2*env_kwargs['quota_penalty']}, got {reward['agent_2']}"
     assert (state.payload == expected_payload).all(), f"FAIL: expected payload to be {expected_payload}, got {state.payload}"
     print("PASS: rewards and payload update correctly when agent 0 has a payload and enters the depot")
 
@@ -414,9 +418,9 @@ def main():
     expected_payload = jnp.array([[0., 0.], [0., 1.], [0., 0.]])
     expected_quota = jnp.array([-4, 0])
     assert (state.p_pos != prev_state.p_pos).any(), f"FAIL: state before and after step with nonzero action match"
-    assert reward['agent_0'] == 0.75, f"FAIL: expected reward for agent 0 to be 0.75, got {reward['agent_0']}"
-    assert reward['agent_1'] == 0.0, f"FAIL: expected reward for agent 1 to be 0.0, got {reward['agent_1']}"
-    assert reward['agent_2'] == 0.0, f"FAIL: expected reward for agent 2 to be 0.0, got {reward['agent_2']}"
+    assert reward['agent_0'] == 0.75 + env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 0 to be {0.75 + env_kwargs['quota_penalty']}, got {reward['agent_0']}"
+    assert reward['agent_1'] == env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 1 to be {env_kwargs['quota_penalty']}, got {reward['agent_1']}"
+    assert reward['agent_2'] == env_kwargs['quota_penalty'], f"FAIL: expected reward for agent 2 to be {env_kwargs['quota_penalty']}, got {reward['agent_2']}"
     assert (state.payload == expected_payload).all(), f"FAIL: expected payload to be {expected_payload}, got {state.payload}"
     assert (state.site_quota == expected_quota).all(), f"FAIL: expected quota to be {expected_quota}, got {state.site_quota}"
     print("PASS: rewards and payload update correctly when agent 0 has payload and enters the site")
