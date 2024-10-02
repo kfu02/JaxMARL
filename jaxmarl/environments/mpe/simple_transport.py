@@ -274,7 +274,7 @@ class SimpleTransportMPE(SimpleMPE):
         }
 
         # # get progress towards quota
-        quota_step = jnp.sum(jnp.array([self.dropoff_reward * _dropoff_rew(i)[1] for i in range(self.num_agents)]), axis=0)
+        quota_step = jnp.sum(jnp.array([_dropoff_rew(i)[1] * state.payload[i] for i in range(self.num_agents)]), axis=0)
         quota_new = state.site_quota + quota_step
 
         # # if quota is met, stop applying penalty, otherwise, apply penalty

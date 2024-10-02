@@ -144,6 +144,7 @@ def expert_heuristic_simple_transport(obs_dict):
     #     rel_other_pos.flatten(),  # N-1, 2
     #     ego_vel.flatten(),  # 2
     #     rel_landmark_p_pos.flatten(), # 3, 2
+    #     state.site_quota.flatten() # 1
     #     payload.flatten(), # 1
     #     # NOTE: caps must go last for hypernet logic
     #     ego_cap.flatten(),  # n_cap
@@ -152,18 +153,30 @@ def expert_heuristic_simple_transport(obs_dict):
 
     # landmark relative locations ordered [concrete depot, lumber depot, construction site]
     landmark_start = (4 + (n_agents-1)*2)
-    rel_landmark_p_pos = all_obs[..., landmark_start:landmark_start+(3*2)].reshape(n_agents, n_envs, 3, 2)  # [n_agents, n_envs, 3, 2]
+    landmark_end = landmark_start+(3*2)
+    rel_landmark_p_pos = all_obs[..., landmark_start:landmark_end].reshape(n_agents, n_envs, 3, 2)  # [n_agents, n_envs, 3, 2]
+
+    # site quota
+    quota_start = landmark_end
+    quota_end = landmark_end + 2
+    site_quota = all_obs[..., quota_start:quota_end]
 
     # payload
-    payload_start = 2+(n_agents-1)*2+2+(3*2)
-    payload = all_obs[..., payload_start]  # [n_agents, n_envs]
+    payload_start = 2+(n_agents-1)*2+2+(3*2)+2
+    payload_end = payload_start + 2
+    payload = all_obs[..., payload_start:payload_end]  # [n_agents, n_envs]
 
     # ego capability
-    ego_cap_start = payload_start + 1
+    ego_cap_start = payload_end
     ego_cap = all_obs[..., ego_cap_start:ego_cap_start + 2]  # [n_agents, n_envs, 2]
 
     # If payload == 0: move towards landmark idx = argmax(ego_cap), else move towards construction site
-    target_landmark_idx = jnp.where(payload == 0, jnp.argmax(ego_cap, axis=-1), 2)  # [n_agents, n_envs]
+    payload_mask = jnp.bitwise_and(payload[..., 0] == 0, payload[..., 1] == 0)
+    # site_quota_mask = jnp.bitwise_or(site_quota[..., 0] < 0, site_quota[..., 1] < 0)
+    # target_landmark_idx = jnp.where(jnp.bitwise_and(payload_mask, site_quota_mask), jnp.argmax(ego_cap, axis=-1), 2)  # [n_agents, n_envs]
+
+    target_landmark_idx = jnp.where(payload_mask, jnp.argmax(ego_cap, axis=-1), 2)  # [n_agents, n_envs]
+
     # target_landmark_idx = jnp.ones((n_agents, n_envs)).astype(int)
     
     # get vectors to landmarks
@@ -737,6 +750,7 @@ def visualize_states(save_dir, alg_name, viz_test_env, config, viz_env_states):
                     rad=viz_env_states.rad[seed, i, env, ...],
                     done=viz_env_states.done[seed, i, env, ...],
                     capacity=viz_env_states.capacity[seed, i, env, ...],
+                    site_quota=viz_env_states.site_quota[seed, i, env, ...],
                     step=i,
                 )
                 state_seq.append(this_step_state)

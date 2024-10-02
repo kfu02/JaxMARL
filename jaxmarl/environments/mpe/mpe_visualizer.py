@@ -69,7 +69,7 @@ class MPEVisualizer(object):
                     state.p_pos[i], state.rad[i], edgecolor=np.array(self.env.colour[i]) / 255
                 )
                 x, y = c.center
-                self.labels.append(self.ax.annotate(f"{np.round(state.capacity[i], decimals=2)}", (x+1.25*state.rad[i], y), color="black", ha="left", va="center", size=6))
+                self.labels.append(self.ax.annotate(f"{state.capacity[i]}", (x+1.25*state.rad[i], y), color="black", ha="left", va="center", size=6))
             else:
                 # otherwise default to filled circles
                 c = Circle(
@@ -94,7 +94,7 @@ class MPEVisualizer(object):
                 x, y = c.center
                 if j == 2:
                     self.labels.append(
-                        self.ax.annotate(f"{np.round(state.site_quota, decimals=2)}",
+                        self.ax.annotate(f"{state.site_quota}",
                         (x, y),
                         color="black", ha="left", va="center", size=8)
                     )
@@ -135,7 +135,7 @@ class MPEVisualizer(object):
                 self.labels[i].set_x(x+1.25*state.rad[i])
                 self.labels[i].set_y(y)
             if self.env_name == "MPE_simple_transport" and i == len(self.labels)-1:
-                self.labels[i].set_text(f"{np.round(state.site_quota, decimals=2)}")
+                self.labels[i].set_text(f"{state.site_quota}")
             
         self.step_counter.set_text(f"Step: {state.step}")
         
