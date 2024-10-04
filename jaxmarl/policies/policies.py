@@ -61,13 +61,13 @@ class AgentMLP(nn.Module):
         return unused, q_vals 
 
 class AgentHyperMLP(nn.Module):
+    # TODO: if using this for experiments, add the hypernet_kwargs/hyper_forward from AgentHyperRNN
     # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
     action_dim: int
     hidden_dim: int
     init_scale: float
-    hypernet_hidden_dim: int
-    hypernet_init_scale: float
     dim_capabilities: int # per team
+    hypernet_kwargs: dict
 
     @nn.compact
     def __call__(self, unused, x):
@@ -84,14 +84,10 @@ class AgentHyperMLP(nn.Module):
         # hypernetwork
         w_1 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.hidden_dim*self.action_dim, init_scale=self.hypernet_init_scale)(orig_obs)
         b_1 = nn.Dense(self.action_dim, kernel_init=orthogonal(self.hypernet_init_scale), bias_init=constant(0.))(orig_obs)
-        # w_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.hidden_dim*self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
-        # b_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
         
         # reshaping
         w_1 = w_1.reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
         b_1 = b_1.reshape(time_steps, batch_size, 1, self.action_dim)
-        # w_2 = w_2.reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
-        # b_2 = b_2.reshape(time_steps, batch_size, 1, self.action_dim)
     
         # two-layer encoder
         embedding = nn.relu(nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs))
@@ -99,32 +95,6 @@ class AgentHyperMLP(nn.Module):
 
         # target network after encoder
         q_vals = jnp.matmul(embedding[:, :, None, :], w_1) + b_1
-        # embedding = nn.relu(jnp.matmul(obs[:, :, None, :], w_1) + b_1)
-        # q_vals = jnp.matmul(embedding, w_2) + b_2
-        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
-
-        # num_weights = (dim_capabilities * self.hidden_dim)
-        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        # w_1 = weight_hypernet(cap_repr).reshape(time_steps, batch_size, dim_capabilities, self.hidden_dim)
-        #
-        # num_biases = self.hidden_dim
-        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
-        # b_1 = bias_hypernet(cap_repr).reshape(time_steps, batch_size, 1, self.hidden_dim)
-        #
-        # num_weights = (self.hidden_dim * self.hidden_dim)
-        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        # w_2 = weight_hypernet(cap_repr).reshape(time_steps, batch_size, self.hidden_dim, self.hidden_dim)
-        #
-        # num_biases = self.hidden_dim
-        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
-        # b_2 = bias_hypernet(cap_repr).reshape(time_steps, batch_size, 1, self.hidden_dim)
-        #
-        # embedding = (cap_repr[:, :, None, :] @ w_1) + b_1
-        # embedding = nn.relu(embedding)
-        # embedding = (embedding @ w_2) + b_2
-        # embedding = nn.relu(embedding)
-
-        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
 
         # hidden, q_vals is the original return for AgentRNN
         # this keeps the train loop consistent
@@ -201,36 +171,15 @@ class AgentHyperRNN(nn.Module):
 
         time_steps, batch_size, obs_dim = obs.shape
 
-        # encoder
-        # original
+        # encoder MLP
         embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
         embedding = nn.relu(embedding)
-
-        # hypernet
-        # hyper_input = obs_dim
-        # hyper_output = self.hidden_dim
-        # num_weights = (hyper_input * hyper_output)
-        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        # weights = weight_hypernet(cap).reshape(time_steps, batch_size, hyper_input, hyper_output)
-        #
-        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=hyper_output, init_scale=0)
-        # biases = bias_hypernet(cap).reshape(time_steps, batch_size, 1, hyper_output)
-
-        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
-        # with leading dims for time_steps, batch_size
-        # embedding = jnp.matmul(obs[:, :, None, :], weights) + biases
-        # embedding = embedding.squeeze(axis=2) # remove extra dim needed for computation
-        # embedding = nn.relu(embedding)
 
         # RNN 
         rnn_in = (embedding, dones)
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
 
-        # decoder
-        # original
-        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
-
-        # hypernet
+        # decoder hypernet
         q_vals = self.hyper_forward(self.hidden_dim, self.action_dim, embedding, orig_obs, time_steps, batch_size)
         return hidden, q_vals
 

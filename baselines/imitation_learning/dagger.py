@@ -786,7 +786,7 @@ def main(config):
     print('Config:\n', OmegaConf.to_yaml(config))
 
     env_name = config["env"]["ENV_NAME"]
-    alg_name = "Behavioral Cloning"
+    alg_name = "DAgger"
     
     train_env = make(config["env"]["ENV_NAME"], **config['env']['ENV_KWARGS'])
     log_train_env = LogWrapper(train_env)
@@ -800,7 +800,8 @@ def main(config):
     aware_tag = "aware" if config["env"]["ENV_KWARGS"]["capability_aware"] else "unaware"
 
     wandb_tags = [
-        alg_name.upper(),
+        alg_name,
+        "imitation learning",
         env_name,
         hyper_tag,
         recurrent_tag,
