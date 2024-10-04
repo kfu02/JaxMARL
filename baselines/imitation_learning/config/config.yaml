@@ -1,4 +1,6 @@
 # experiment params
+# TODO: NUM_SEEDS JIT is broken, likely because of the for-loop I have
+# must keep this 1
 NUM_SEEDS: 1
 SEED: 76
 

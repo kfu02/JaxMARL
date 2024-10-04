@@ -691,7 +691,7 @@ def make_train(config, log_train_env, log_test_env):
 
         jax.debug.print("Starting main loop of DAgger...")
         # DAgger main loop
-        total_updates = 0
+        total_updates = jnp.array(0)
         for dagger_iter in range(config['DAGGER_ITERATIONS']):
             # Collect new data, add it to buffer
             rng, _rng = jax.random.split(rng)
