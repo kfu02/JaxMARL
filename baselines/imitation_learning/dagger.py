@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from functools import partial
-from typing import NamedTuple, Dict, Union
+from typing import NamedTuple, Dict, Union, Callable
 
 import chex
 import optax
@@ -43,11 +43,30 @@ class Transition(NamedTuple):
     dones: dict
     infos: dict
 
-def expert_heuristic_simple_fire(valid_set_partitions, num_landmarks, obs_dict):
+def expert_heuristic_material_transport(obs_dict, cached_values):
     """
-    Expert policy to gather samples from.
+    Expert policy to gather samples from for HMT env.
     pi(obs) -> action for each agent/obs
+
+    Input: obs_dict = {agent_i : [timesteps, num_envs, obs_dim]}
+    Output: actions = {agent_i : [timesteps, num_envs]} (rather than outputting act_dim, directly output index of best action)
+
+    cached_values are only there to help speed up computation.
     """
+    # TODO(Shalin): fill this in
+    pass
+
+def expert_heuristic_simple_fire(obs_dict, cached_values):
+    """
+    Expert policy to gather samples from for firefighting env.
+    pi(obs) -> action for each agent/obs
+
+    Input: obs_dict = {agent_i : [timesteps, num_envs, obs_dim]}
+    Output: actions = {agent_i : [timesteps, num_envs]} (rather than outputting act_dim, directly output index of best action)
+
+    cached_values are only there to help speed up computation.
+    """
+    valid_set_partitions, num_landmarks = cached_values["valid_set_partitions"], cached_values["num_landmarks"]
     num_agents = len(obs_dict)
 
     def solve_one_env(obs):
@@ -134,7 +153,7 @@ def expert_heuristic_simple_fire(valid_set_partitions, num_landmarks, obs_dict):
 
     return actions
 
-def make_train(config, log_train_env, log_test_env):
+def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, expert_cached_values: dict):
     """
     (1) collect 1 seed's worth of traj data with the expert heuristic and logs expert metrics
     (2) train an imitation learning policy to match the collected data (cross-entropy loss)
@@ -208,22 +227,6 @@ def make_train(config, log_train_env, log_test_env):
         # -------------------- --------------------
         # INIT EXPERT_BUFFER 
 
-        # for expert heuristic...
-        # find all partitions of a set of N agents into k fires, for use in heuristic
-        # pad with -1 until each partition is length N, in order to use JIT-compiled func
-        # (later when computing rew, we'll ensure -1 -> 0 reward)
-        N = log_train_env.num_agents
-        k = log_train_env.num_landmarks
-
-        lst = list(range(N))
-        all_set_partitions = [part for k in range(1, len(lst) + 1) for part in mit.set_partitions(lst, k)]
-        valid_set_partitions = []
-        for part in all_set_partitions:
-            if len(part) == k:
-                fixed_len_part = [jnp.pad(jnp.array(p), (0, N-len(p)), constant_values=(-1,)) for p in part]
-                valid_set_partitions.append(fixed_len_part)
-        valid_set_partitions = jnp.array(valid_set_partitions)
-
         # randomly sample 1 trajectory to learn the structure, needed to init flashbax buffers
         def _env_sample_step(env_state, unused):
             rng, key_a, key_s = jax.random.split(jax.random.PRNGKey(0), 3) # use a dummy rng here
@@ -272,7 +275,7 @@ def make_train(config, log_train_env, log_test_env):
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
 
-                actions = expert_heuristic_simple_fire(valid_set_partitions, log_train_env.num_landmarks, obs_)
+                actions = expert_heuristic(obs_, expert_cached_values)
                 actions = jax.tree.map(lambda x: x.squeeze(0), actions) # rm dummy time_step dim
 
                 # step in env with action
@@ -492,7 +495,7 @@ def make_train(config, log_train_env, log_test_env):
                 h_state, policy_action_logits = homogeneous_pass(train_state.params['agent'], last_h, obs_, dones_)
                 policy_actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), policy_action_logits, wrapped_env.valid_actions)
 
-                expert_actions = expert_heuristic_simple_fire(valid_set_partitions, log_train_env.num_landmarks, obs_)
+                expert_actions = expert_heuristic(obs_, expert_cached_values)
                 expert_actions = jax.tree.map(lambda x: x.squeeze(0), expert_actions) # rm dummy time_step dim
 
                 # pick expert actions with probability beta, else choose learned policy
@@ -823,10 +826,37 @@ def main(config):
         mode=config["WANDB_MODE"],
     )
     
+    # pick the correct expert heuristic, based on env
+    expert_heuristic = None
+    expert_cached_values = None
+    env_name = config['env']['ENV_NAME']
+    if env_name == "MPE_simple_fire":
+        expert_heuristic = expert_heuristic_simple_fire
+
+        # find all partitions of a set of N agents into k fires, for use in heuristic
+        # pad with -1 until each partition is length N, in order to use JIT-compiled func
+        # (later when computing rew, we'll ensure -1 -> 0 reward)
+        N = log_train_env.num_agents
+        k = log_train_env.num_landmarks
+
+        lst = list(range(N))
+        all_set_partitions = [part for k in range(1, len(lst) + 1) for part in mit.set_partitions(lst, k)]
+        valid_set_partitions = []
+        for part in all_set_partitions:
+            if len(part) == k:
+                fixed_len_part = [jnp.pad(jnp.array(p), (0, N-len(p)), constant_values=(-1,)) for p in part]
+                valid_set_partitions.append(fixed_len_part)
+        valid_set_partitions = jnp.array(valid_set_partitions)
+        expert_cached_values = {"valid_set_partitions": valid_set_partitions, "num_landmarks": k}
+
+    elif env_name == "MPE_material_transport":
+        expert_heuristic = expert_heuristic_material_transport
+        expert_cached_values = {}
+
     # collect one full expert_buffer, then train a policy on that expert_buffer (for each seed)
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env)))
+    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env, expert_heuristic, expert_cached_values)))
     outs = jax.block_until_ready(train_vjit(rngs))
 
     expert_traj_count = outs["expert_runner_state"][0]

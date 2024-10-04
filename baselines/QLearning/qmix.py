@@ -593,12 +593,14 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
 
             final_env_state = step_state[1].env_state
             fire_env_metrics = fire_env_metrics(final_env_state)
+            # TODO(Shalin): compute metrics for HMT here
             metrics = {
                 'test_returns': first_returns['__all__'],# episode returns
                 # NOTE: only works for simple spread
                 # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
                 'test_fire_success_rate': fire_env_metrics[0],
                 'test_pct_fires_put_out': fire_env_metrics[1],
+                # TODO(Shalin): add in metrics for HMT here
                 'test_snd': snd_value,
                 **{'test_'+k:v for k,v in first_infos.items()},
             }
