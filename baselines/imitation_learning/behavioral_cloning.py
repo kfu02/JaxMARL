@@ -390,12 +390,12 @@ def make_train(config, log_train_env, log_test_env):
             if not config["AGENT_HYPERAWARE"]:
                 agent = AgentMLP(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
             else:
-                agent = AgentHyperMLP(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_hidden_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], dim_capabilities=log_train_env.dim_capabilities)
+                agent = AgentHyperMLP(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_kwargs=config["AGENT_HYPERNET_KWARGS"], dim_capabilities=log_train_env.dim_capabilities)
         else: 
             if not config["AGENT_HYPERAWARE"]:
                 agent = AgentRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'])
             else:
-                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"], hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"], dim_capabilities=log_train_env.dim_capabilities)
+                agent = AgentHyperRNN(action_dim=wrapped_env.max_action_space, hidden_dim=config["AGENT_HIDDEN_DIM"], init_scale=config['AGENT_INIT_SCALE'], hypernet_kwargs=config["AGENT_HYPERNET_KWARGS"], dim_capabilities=log_train_env.dim_capabilities)
 
         rng, _rng = jax.random.split(rng)
 
@@ -493,6 +493,7 @@ def make_train(config, log_train_env, log_test_env):
                 policy_actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), policy_action_logits, wrapped_env.valid_actions)
 
                 expert_actions = expert_heuristic_simple_fire(valid_set_partitions, log_train_env.num_landmarks, obs_)
+                expert_actions = jax.tree.map(lambda x: x.squeeze(0), expert_actions) # rm dummy time_step dim
 
                 # pick expert actions with probability beta, else choose learned policy
                 beta = config['DAGGER_BETA']  # Probability of using expert action
@@ -692,7 +693,6 @@ def make_train(config, log_train_env, log_test_env):
         # DAgger main loop
         total_updates = 0
         for dagger_iter in range(config['DAGGER_ITERATIONS']):
-            """
             # Collect new data, add it to buffer
             rng, _rng = jax.random.split(rng)
             init_obs, env_state = wrapped_env.batch_reset(_rng)
@@ -714,7 +714,6 @@ def make_train(config, log_train_env, log_test_env):
             # update for next outer loop
             traj_count = expert_runner_state[0]
             expert_buffer_state = dagger_runner_state[1]
-            """
 
             # Update policy from buffer & test
             rng, _rng = jax.random.split(rng)
