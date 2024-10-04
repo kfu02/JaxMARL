@@ -2,7 +2,7 @@ NUM_ENVS: 8
 # NOTE: NUM_STEPS now defined by config.env.env_kwargs.max_steps
 BUFFER_SIZE: 5000
 BUFFER_BATCH_SIZE: 32
-TOTAL_TIMESTEPS: 5e6 # 2050000
+TOTAL_TIMESTEPS: 4e6 # 2050000
 
 # agent network params
 PARAMETERS_SHARING: True
@@ -10,8 +10,11 @@ AGENT_HIDDEN_DIM: 32 # width of the RNN hidden dim + surrounding MLP layers
 AGENT_RECURRENT: True
 AGENT_INIT_SCALE: 2.
 AGENT_HYPERAWARE: True
-AGENT_HYPERNET_HIDDEN_DIM: 16 # width of hypernet
-AGENT_HYPERNET_INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
+AGENT_HYPERNET_KWARGS:
+  HIDDEN_DIM: 16 # width of hypernet
+  INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
+  USE_LAYER_NORM: True # whether LN is included before ReLU
+  NUM_LAYERS: 4 # layers in hypernet, not target net
 
 EPSILON_START: 1.0
 EPSILON_FINISH: 0.05
