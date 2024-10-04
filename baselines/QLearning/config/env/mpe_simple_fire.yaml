@@ -12,8 +12,8 @@ ENV_KWARGS:
   # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
   capability_aware: True # T/F
   num_capabilities: 2
-  num_agents: 5
-  num_landmarks: 3
+  num_agents: 3
+  num_landmarks: 2
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
   # NOTE: hijacking agent_rads = firefighting capability

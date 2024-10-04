@@ -44,6 +44,7 @@ from jaxmarl.environments.mpe import MPEVisualizer
 from jaxmarl.environments.mpe.simple import State
 
 from jaxmarl.policies import ScannedRNN, AgentMLP, AgentHyperMLP, AgentRNN, AgentHyperRNN, HyperNetwork
+from jaxmarl.utils import snd
 
 class MixingNetwork(nn.Module):
     """
@@ -503,7 +504,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), q_vals, test_env.valid_actions)
                 obs, env_state, rewards, dones, infos = test_env.batch_step(key_s, env_state, actions)
                 step_state = (params, env_state, obs, dones, hstate, rng)
-                return step_state, (rewards, dones, infos, env_state.env_state) # save all EnvState (not LogEnvState) to visualize
+                return step_state, (rewards, dones, infos, env_state.env_state, obs, hstate) # save all EnvState (not LogEnvState) to visualize
             rng, _rng = jax.random.split(rng)
             init_obs, env_state = test_env.batch_reset(_rng)
             init_dones = {agent:jnp.zeros((config["NUM_TEST_EPISODES"]), dtype=bool) for agent in test_env.training_agents+['__all__']}
@@ -520,9 +521,12 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 hstate, 
                 _rng,
             )
-            step_state, (rewards, dones, infos, viz_env_states) = jax.lax.scan(
+            step_state, (rewards, dones, infos, viz_env_states, obs, hstate) = jax.lax.scan(
                 _greedy_env_step, step_state, None, config["NUM_STEPS"]
             )
+
+            # get snd, NOTE: dim_c multiplier is currently hardcoded since it works for both fire and transport 
+            snd_value = snd(rollouts=obs, hiddens=hstate, dim_c=len(test_env.training_agents)*2, params=params, policy='qmix', agent=agent)
 
             def fire_env_metrics(final_env_state):
                 """
@@ -593,6 +597,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
                 'test_fire_success_rate': fire_env_metrics[0],
                 'test_pct_fires_put_out': fire_env_metrics[1],
+                'test_snd': snd_value,
                 **{'test_'+k:v for k,v in first_infos.items()},
             }
             if config.get('VERBOSE', False):
