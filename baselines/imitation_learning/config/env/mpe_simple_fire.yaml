@@ -4,7 +4,7 @@ ENV_KWARGS:
 
   fire_rad_range: [0.2, 0.3]
 
-  # reward shaping
+  # reward shaping (NOT USED IN IL)
   fire_out_reward: 0.5
   uncovered_penalty_factor: 1
   pos_shaping_factor: 0.01
@@ -12,8 +12,8 @@ ENV_KWARGS:
   # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
   capability_aware: True # T/F
   num_capabilities: 2
-  num_agents: 5
-  num_landmarks: 3
+  num_agents: 3
+  num_landmarks: 2
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
   # NOTE: hijacking agent_rads = firefighting capability

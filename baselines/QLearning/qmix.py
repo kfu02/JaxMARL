@@ -43,251 +43,9 @@ from jaxmarl.environments.overcooked import overcooked_layouts
 from jaxmarl.environments.mpe import MPEVisualizer
 from jaxmarl.environments.mpe.simple import State
 
+from jaxmarl.policies import ScannedRNN, AgentMLP, AgentHyperMLP, AgentRNN, AgentHyperRNN, HyperNetwork
 from jaxmarl.utils import snd
 
-
-class ScannedRNN(nn.Module):
-
-    @partial(
-        nn.scan,
-        variable_broadcast="params",
-        in_axes=0,
-        out_axes=0,
-        split_rngs={"params": False},
-    )
-    @nn.compact
-    def __call__(self, carry, x):
-        """Applies the module."""
-        rnn_state = carry
-        ins, resets = x
-        hidden_size = ins.shape[-1]
-        rnn_state = jnp.where(
-            resets[:, np.newaxis],
-            self.initialize_carry(hidden_size, *ins.shape[:-1]),
-            rnn_state,
-        )
-        new_rnn_state, y = nn.GRUCell(hidden_size)(rnn_state, ins)
-        return new_rnn_state, y
-
-    @staticmethod
-    def initialize_carry(hidden_size, *batch_size):
-        # Use a dummy key since the default state init fn is just zeros.
-        return nn.GRUCell(hidden_size, parent=None).initialize_carry(
-            jax.random.PRNGKey(0), (*batch_size, hidden_size)
-        )
-
-    
-class AgentMLP(nn.Module):
-    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
-    action_dim: int
-    hidden_dim: int
-    init_scale: float
-
-    @nn.compact
-    def __call__(self, unused, x, train=False):
-        obs, dones = x
-
-        embedding = nn.relu(nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs))
-        embedding = nn.relu(nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding))
-        q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
-
-        # hidden, q_vals is the original return for AgentRNN
-        # this is just to keep the training loop code consistent
-        return unused, q_vals 
-
-class AgentHyperMLP(nn.Module):
-    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
-    action_dim: int
-    hidden_dim: int
-    init_scale: float
-    hypernet_hidden_dim: int
-    hypernet_init_scale: float
-    dim_capabilities: int # per team
-
-    @nn.compact
-    def __call__(self, unused, x, train=False):
-        orig_obs, dones = x
-
-        # separate obs into capabilities and observations
-        # (env gives obs = orig obs+cap)
-        # NOTE: this is hardcoded to match simple_spread's computation
-        cap = orig_obs[:, :, -self.dim_capabilities:] # last dim_cap elements in obs are cap
-        obs = orig_obs[:, :, :-self.dim_capabilities]
-
-        time_steps, batch_size, obs_dim = obs.shape
-
-        # hypernetwork
-        w_1 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.hidden_dim*self.action_dim, init_scale=self.hypernet_init_scale)(orig_obs)
-        b_1 = nn.Dense(self.action_dim, kernel_init=orthogonal(self.hypernet_init_scale), bias_init=constant(0.))(orig_obs)
-        # w_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.hidden_dim*self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
-        # b_2 = HyperNetwork(hidden_dim=self.hypernet_hidden_dim, output_dim=self.action_dim, init_scale=self.hypernet_init_scale)(cap_repr)
-        
-        # reshaping
-        w_1 = w_1.reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
-        b_1 = b_1.reshape(time_steps, batch_size, 1, self.action_dim)
-        # w_2 = w_2.reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
-        # b_2 = b_2.reshape(time_steps, batch_size, 1, self.action_dim)
-    
-        # two-layer encoder
-        embedding = nn.relu(nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs))
-        embedding = nn.relu(nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding))
-
-        # target network after encoder
-        q_vals = jnp.matmul(embedding[:, :, None, :], w_1) + b_1
-        # embedding = nn.relu(jnp.matmul(obs[:, :, None, :], w_1) + b_1)
-        # q_vals = jnp.matmul(embedding, w_2) + b_2
-        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
-
-        # num_weights = (dim_capabilities * self.hidden_dim)
-        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        # w_1 = weight_hypernet(cap_repr).reshape(time_steps, batch_size, dim_capabilities, self.hidden_dim)
-        #
-        # num_biases = self.hidden_dim
-        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
-        # b_1 = bias_hypernet(cap_repr).reshape(time_steps, batch_size, 1, self.hidden_dim)
-        #
-        # num_weights = (self.hidden_dim * self.hidden_dim)
-        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        # w_2 = weight_hypernet(cap_repr).reshape(time_steps, batch_size, self.hidden_dim, self.hidden_dim)
-        #
-        # num_biases = self.hidden_dim
-        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
-        # b_2 = bias_hypernet(cap_repr).reshape(time_steps, batch_size, 1, self.hidden_dim)
-        #
-        # embedding = (cap_repr[:, :, None, :] @ w_1) + b_1
-        # embedding = nn.relu(embedding)
-        # embedding = (embedding @ w_2) + b_2
-        # embedding = nn.relu(embedding)
-
-        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
-
-        # hidden, q_vals is the original return for AgentRNN
-        # this keeps the train loop consistent
-        return unused, q_vals 
-
-
-class AgentRNN(nn.Module):
-    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
-    action_dim: int
-    hidden_dim: int
-    init_scale: float
-
-    @nn.compact
-    def __call__(self, hidden, x, train=False):
-        obs, dones = x
-
-        # NOTE: SimpleSpread gives obs as obs+cap (concatenated) and zeroes out
-        # the capabilities if capability_aware=False in config. Thus, no change
-        # is needed here for capability aware/unaware.
-        embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
-        embedding = nn.relu(embedding)
-
-        rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN()(hidden, rnn_in)
-        
-        q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
-
-        return hidden, q_vals
-
-
-class AgentHyperRNN(nn.Module):
-    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
-    action_dim: int
-    hidden_dim: int
-    init_scale: float
-    dim_capabilities: int # per team
-    hypernet_kwargs: dict
-
-    def hyper_forward(self, in_dim, out_dim, target_in, hyper_in, time_steps, batch_size):
-        """
-        Compute y = xW + b where W/b are created by a hypernetwork.
-
-        in_dim : dimension of target input x
-        out_dim : dimension of target output y
-        target_in : target input
-        hyper_in : input to hypernet
-
-        time_steps/batch_size : parallel dims
-        """
-        num_weights = (in_dim * out_dim)
-        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_kwargs["HIDDEN_DIM"], output_dim=num_weights, init_scale=self.hypernet_kwargs["INIT_SCALE"], num_layers=self.hypernet_kwargs["NUM_LAYERS"], use_layer_norm=self.hypernet_kwargs["USE_LAYER_NORM"])
-        weights = weight_hypernet(hyper_in).reshape(time_steps, batch_size, in_dim, out_dim)
-
-        num_biases = out_dim
-        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_kwargs["HIDDEN_DIM"], output_dim=num_biases, init_scale=0, num_layers=self.hypernet_kwargs["NUM_LAYERS"], use_layer_norm=self.hypernet_kwargs["USE_LAYER_NORM"])
-        biases = bias_hypernet(hyper_in).reshape(time_steps, batch_size, 1, out_dim)
-
-        # compute y = xW + b
-        # NOTE: slicing here expands embedding to be (1, in_dim) @ (in_dim, out_dim)
-        # with leading dims for time_steps, batch_size
-        target_out = jnp.matmul(target_in[:, :, None, :], weights) + biases
-        target_out = target_out.squeeze(axis=2) # remove extra dim needed for computation
-        return target_out
-
-    @nn.compact
-    def __call__(self, hidden, x, train=True):
-        orig_obs, dones = x
-
-        # separate obs into capabilities and observations
-        # (env gives obs = orig obs+cap)
-        # NOTE: this is hardcoded to match simple_spread's computation
-        cap = orig_obs[:, :, -self.dim_capabilities:]
-        obs = orig_obs[:, :, :-self.dim_capabilities]
-
-        time_steps, batch_size, obs_dim = obs.shape
-
-        # encoder
-        # original
-        embedding = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(obs)
-        embedding = nn.relu(embedding)
-
-        # hypernet
-        # hyper_input = obs_dim
-        # hyper_output = self.hidden_dim
-        # num_weights = (hyper_input * hyper_output)
-        # weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        # weights = weight_hypernet(cap).reshape(time_steps, batch_size, hyper_input, hyper_output)
-        #
-        # bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=hyper_output, init_scale=0)
-        # biases = bias_hypernet(cap).reshape(time_steps, batch_size, 1, hyper_output)
-
-        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
-        # with leading dims for time_steps, batch_size
-        # embedding = jnp.matmul(obs[:, :, None, :], weights) + biases
-        # embedding = embedding.squeeze(axis=2) # remove extra dim needed for computation
-        # embedding = nn.relu(embedding)
-
-        # RNN 
-        rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN()(hidden, rnn_in)
-
-        # decoder
-        # original
-        # q_vals = nn.Dense(self.action_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.0))(embedding)
-
-        # hypernet
-        q_vals = self.hyper_forward(self.hidden_dim, self.action_dim, embedding, orig_obs, time_steps, batch_size)
-        return hidden, q_vals
-
-class HyperNetwork(nn.Module):
-    """HyperNetwork for generating weights of QMix' mixing network."""
-    hidden_dim: int
-    output_dim: int
-    init_scale: float
-    # defaults for QMIX mixer network
-    num_layers: int = 2
-    use_layer_norm: bool = False
-
-    @nn.compact
-    def __call__(self, x):
-        for _ in range(self.num_layers-1):
-            x = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(x)
-            if self.use_layer_norm:
-                x = nn.LayerNorm()(x)
-            x = nn.relu(x)
-
-        x = nn.Dense(self.output_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(x)
-        return x
 
 class MixingNetwork(nn.Module):
     """
@@ -486,7 +244,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
 
         # depending if using parameters sharing or not, q-values are computed using one or multiple parameters
         if config["PARAMETERS_SHARING"]:
-            def homogeneous_pass(params, hidden_state, obs, dones, train=True):
+            def homogeneous_pass(params, hidden_state, obs, dones):
                 # concatenate agents and parallel envs to process them in one batch
                 agents, flatten_agents_obs = zip(*obs.items())
                 original_shape = flatten_agents_obs[0].shape # assumes obs shape is the same for all agents
@@ -494,7 +252,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                     jnp.concatenate(flatten_agents_obs, axis=1), # (time_step, n_agents*n_envs, obs_size)
                     jnp.concatenate([dones[agent] for agent in agents], axis=1), # ensure to not pass other keys (like __all__)
                 )
-                hidden_state, q_vals = agent.apply(params, hidden_state, batched_input, train=train)
+                hidden_state, q_vals = agent.apply(params, hidden_state, batched_input)
                 q_vals = q_vals.reshape(original_shape[0], len(agents), *original_shape[1:-1], -1) # (time_steps, n_agents, n_envs, action_dim)
                 q_vals = {a:q_vals[:,i] for i,a in enumerate(agents)}
                 return hidden_state, q_vals
@@ -744,7 +502,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                 obs_   = {a:last_obs[a] for a in test_env.training_agents}
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
-                hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_, train=False)
+                hstate, q_vals = homogeneous_pass(params, hstate, obs_, dones_)
                 actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), q_vals, test_env.valid_actions)
                 obs, env_state, rewards, dones, infos = test_env.batch_step(key_s, env_state, actions)
                 step_state = (params, env_state, obs, dones, hstate, rng)

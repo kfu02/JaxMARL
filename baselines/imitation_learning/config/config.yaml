@@ -1,17 +1,19 @@
 # experiment params
-"NUM_SEEDS": 10
-"SEED": 76
+# TODO: NUM_SEEDS JIT is broken, likely because of the for-loop I have
+# must keep this 1
+NUM_SEEDS: 1
+SEED: 76
 
 # wandb params
-"ENTITY": "star-lab-gt"
-"PROJECT": "JaxMARL"
-"WANDB_MODE": "online"
+ENTITY: star-lab-gt
+PROJECT: JaxMARL
+WANDB_MODE: online
 
 # where to save the params (if None, will not save)
 # TODO: uncomment this and test the save/viz sections
-"SAVE_PATH": "baselines/imitation_learning/checkpoints"
+SAVE_PATH: baselines/imitation_learning/checkpoints
 
-"VISUALIZE_FINAL_POLICY": True
+VISUALIZE_FINAL_POLICY: True
 # number of seeds/envs to visualize
-"VIZ_NUM_ENVS": 3
-"VIZ_NUM_SEEDS": 5
+VIZ_NUM_ENVS: 3
+# VIZ_NUM_SEEDS: 5
