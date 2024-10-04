@@ -118,7 +118,7 @@ class Transition(NamedTuple):
     infos: dict
 
 
-def make_train(config, log_train_env, log_test_env, viz_test_env):
+def make_train(config, log_train_env, log_test_env, viz_test_env, env_name="MPE_simple_fire"):
     """
     NOTE: log_train_env and log_test_env should be identical, other than a single
     test_env_flag, which causes log_test_env to only sample from test_capabilities.
@@ -466,17 +466,34 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
                     #     k:v[...,0][infos["returned_episode"][..., 0]].mean()
                     #     for k,v in infos.items() if k!="returned_episode"
                     # }
-                    wandb.log(
-                        {
-                            "returns": metrics['rewards']['__all__'].mean(),
-                            "timestep": metrics['timesteps'],
-                            "updates": metrics['updates'],
-                            "loss": metrics['loss'],
-                            'epsilon': metrics['eps'],
-                            # **info_metrics,
-                            **{k:v.mean() for k, v in metrics['test_metrics'].items()}
+                    if env_name == "MPE_simple_fire":
+                        wandb.log(
+                            {
+                                "returns": metrics['rewards']['__all__'].mean(),
+                                "timestep": metrics['timesteps'],
+                                "updates": metrics['updates'],
+                                "loss": metrics['loss'],
+                                'epsilon': metrics['eps'],
+                                # **info_metrics,
+                                **{k:v.mean() for k, v in metrics['test_metrics'].items()}
+                            }
+                        )
+                    elif env_name == "MPE_simple_transport":
+                        info_metrics = {
+                            'quota_met': jnp.max(infos['quota_met'], axis=0).mean(),
+                            'makespan': jnp.min(infos['makespan'], axis=0).mean(),
                         }
-                    )
+                        wandb.log(
+                            {
+                                "returns": metrics['rewards']['__all__'].mean(),
+                                "timestep": metrics['timesteps'],
+                                "updates": metrics['updates'],
+                                "loss": metrics['loss'],
+                                'epsilon': metrics['eps'],
+                                **info_metrics,
+                                **{k:v.mean() for k, v in metrics['test_metrics'].items()}
+                            }
+                        )
                 jax.debug.callback(callback, metrics, traj_batch.infos)
 
             runner_state = (
@@ -593,15 +610,28 @@ def make_train(config, log_train_env, log_test_env, viz_test_env):
 
             final_env_state = step_state[1].env_state
             fire_env_metrics = fire_env_metrics(final_env_state)
-            metrics = {
-                'test_returns': first_returns['__all__'],# episode returns
-                # NOTE: only works for simple spread
-                # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
-                'test_fire_success_rate': fire_env_metrics[0],
-                'test_pct_fires_put_out': fire_env_metrics[1],
-                'test_snd': snd_value,
-                **{'test_'+k:v for k,v in first_infos.items()},
-            }
+            if env_name == "MPE_simple_fire":
+                metrics = {
+                    'test_returns': first_returns['__all__'],# episode returns
+                    # NOTE: only works for simple spread
+                    # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
+                    'test_fire_success_rate': fire_env_metrics[0],
+                    'test_pct_fires_put_out': fire_env_metrics[1],
+                    'test_snd': snd_value,
+                    **{'test_'+k:v for k,v in first_infos.items()},
+                }
+            elif env_name == "MPE_simple_transport":
+                info_metrics = {
+                    'quota_met': jnp.max(infos['quota_met'], axis=0),
+                    'makespan': jnp.min(infos['makespan'], axis=0)
+                }
+                metrics = {
+                    'test_returns': first_returns['__all__'],# episode returns
+                    # NOTE: only works for simple spread
+                    # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
+                    'test_snd': snd_value,
+                    **{'test_'+k:v for k,v in info_metrics.items()},
+                }
             if config.get('VERBOSE', False):
                 def callback(timestep, val):
                     print(f"Timestep: {timestep}, return: {val}")
@@ -689,7 +719,7 @@ def main(config):
     
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env, viz_test_env)))
+    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env, viz_test_env, env_name=config["env"]["ENV_NAME"])))
     outs = jax.block_until_ready(train_vjit(rngs))
     
     # save params

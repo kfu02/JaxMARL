@@ -155,7 +155,16 @@ class SimpleTransportMPE(SimpleMPE):
 
         obs = self.get_obs(state)
 
-        info = {}
+        # mask to indicate if quota has been met
+        quota_done = jnp.bitwise_and(state.site_quota[0] >= 0, state.site_quota[1] >= 0).reshape(-1,1)
+
+        # mask to log makespan if quota has been met, otherwise just trivially set to max steps
+        makespan = jnp.where(quota_done, state.step, self.max_steps)
+
+        info = {
+            "quota_met": quota_done,
+            "makespan": makespan,
+        }
 
         dones = {a: done[i] for i, a in enumerate(self.agents)}
         dones.update({"__all__": jnp.all(done)})
