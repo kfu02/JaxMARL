@@ -289,7 +289,7 @@ class SimpleTransportMPE(SimpleMPE):
         quota_new = state.site_quota + quota_step
 
         # # if quota is met, stop applying penalty, otherwise, apply penalty
-        quota_rew = jnp.mean(jnp.where(quota_new < 0, self.quota_penalty, 0), axis=0)
+        quota_rew = jnp.mean(jnp.where(quota_new < 0, self.quota_penalty, -self.quota_penalty), axis=0)
         rew = {a: rew[a] + quota_rew for a in rew}
 
         return rew

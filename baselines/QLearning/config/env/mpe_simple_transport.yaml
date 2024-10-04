@@ -19,7 +19,7 @@ ENV_KWARGS:
   agent_accels: [2, 2, 2, 2]
   agent_capacities: [[1.0, 0.0], [0.0, 1.0], [0.75, 0.25], [0.25, 0.75], [0.5, 0.5]]
 
-  site_quota: [2., 2.]
+  site_quota: [3., 3.]
 
   test_team:
     agent_capacities: [[0.1, 0.9], [0.3, 0.7], [0.7, 0.3], [0.9, 0.1]]
