@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-def homogeneous_pass_qmix(params, hidden_state, obs, dones, agent=None, train=False):
+def homogeneous_pass_qmix(params, hidden_state, obs, dones, agent=None):
     """
     Copied and slightly modified from qmix.py
     """
@@ -13,7 +13,7 @@ def homogeneous_pass_qmix(params, hidden_state, obs, dones, agent=None, train=Fa
     )
 
     hidden_state = hidden_state.reshape(hidden_state.shape[0]*hidden_state.shape[1], hidden_state.shape[2])
-    hidden_state, q_vals = agent.apply(params, hidden_state, batched_input, train=train)
+    hidden_state, q_vals = agent.apply(params, hidden_state, batched_input)
  
     q_vals = q_vals.reshape(*original_shape[:-1], -1) # (time_steps, n_envs, n_agents, action_dim)
 
