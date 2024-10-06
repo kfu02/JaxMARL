@@ -27,6 +27,8 @@ class SimpleTransportMPE(SimpleMPE):
         self.num_capabilities = num_capabilities
         self.dim_capabilities = num_agents * num_capabilities
         self.test_team = kwargs.get("test_team", None)
+        self.test_within_dist_flag = kwargs.get("test_within_dist_flag", None)
+        self.test_out_dist_flag = kwargs.get("test_out_dist_flag", None)
 
         # observation dimensions
         pos_dim = num_agents * 2
@@ -50,6 +52,42 @@ class SimpleTransportMPE(SimpleMPE):
         self.lumber_pickup_reward = kwargs.get("lumber_pickup_reward", 0.25)
         self.dropoff_reward = kwargs.get("dropoff_reward", 0.75)
         self.quota_penalty = kwargs.get("quota_penalty", -0.005)
+
+        # instantiate agent capabilities
+        self.agent_pool_size = kwargs.get("agent_pool_size", 40)
+        self.train_cap_range = kwargs.get("train_cap_range", [0.0, 0.5])
+        self.test_cap_range = kwargs.get("test_cap_range", [0.5, 1.0])
+
+        if self.agent_pool_size and self.train_cap_range and self.test_cap_range:
+            rng = jax.random.PRNGKey(0)
+            # generate random set of training agents
+            train_agent_pool = jax.random.uniform(
+                rng, 
+                (self.agent_pool_size, num_capabilities),
+                minval=self.train_cap_range[0],
+                maxval=self.train_cap_range[1]
+            )
+            train_agent_pool = jnp.round(train_agent_pool, 2)
+            
+            # get 10 random agents for training
+            indices = jax.random.permutation(rng, self.agent_pool_size)[:10]
+            self.train_agents = train_agent_pool[indices]
+
+            # get 10 random agents for unseen within dist testing
+            test_within_dist_indices = jnp.setdiff1d(jnp.arange(self.agent_pool_size), indices)
+            selected_indices = jax.random.permutation(rng, len(test_within_dist_indices))[:10]
+            self.test_within_dist_agents = train_agent_pool[test_within_dist_indices[selected_indices]]
+
+            # get 10 random agents from out of distribution
+            test_out_dist_pool = jax.random.uniform(
+                rng, 
+                (self.agent_pool_size, num_capabilities),
+                minval=self.test_cap_range[0],
+                maxval=self.test_cap_range[1]
+            )
+            test_out_dist_pool = jnp.round(test_out_dist_pool, 2)
+            indices = jax.random.permutation(rng, self.agent_pool_size)[:10]
+            self.test_out_dist_agents = test_out_dist_pool[indices]
 
         # no collisions in this env
         collide = jnp.concatenate(
@@ -322,19 +360,29 @@ class SimpleTransportMPE(SimpleMPE):
         
         agent_rads = self.agent_rads[selected_agents]
         agent_accels = self.agent_accels[selected_agents]
-        agent_capacities = self.agent_capacities[selected_agents]
 
-        # if a test distribution is provided and this is a test_env, override capacities
-        # NOTE: also add other capabilities here?
-        if self.test_env_flag and self.test_team is not None:
-            agent_capacities = jnp.array(self.test_team["agent_capacities"])
+        # set agent capacities
+        selected_capacities = jax.random.choice(key_a, self.agent_range, shape=(self.num_agents,), replace=False)
+        agent_capacities = self.train_agents[selected_capacities]
 
-        # initialize with empty payload or a payload corresponding to capacity
-        payload = jnp.where(
-            jax.random.uniform(key_l, (self.num_agents, 1)) < 0.5, 
-            0, 
-            jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
-        )
+        # if test environment, use within dist or ood accordingly
+        if self.test_within_dist_flag:
+            agent_capacities = self.test_within_dist_agents[selected_capacities]
+        if self.test_out_dist_flag:
+            agent_capacities = self.test_out_dist_agents[selected_capacities]
+
+        # # initialize with empty payload or a payload corresponding to capacity
+        # payload = jnp.where(
+        #     jax.random.uniform(key_l, (self.num_agents, 1)) < 0.5, 
+        #     0, 
+        #     jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
+        # )
+
+        # initialize feasible quota based on agent capacities
+        selected_indices = jax.random.randint(key_a, (self.num_agents,), minval=0, maxval=2)
+        concrete_quota = jnp.sum(jnp.where(selected_indices == 0, agent_capacities[:,0], 0))
+        lumber_quota = jnp.sum(jnp.where(selected_indices == 1, agent_capacities[:,1], 0))
+        self.site_quota = 2*jnp.array([concrete_quota, lumber_quota])
 
         state = State(
             p_pos=p_pos,
