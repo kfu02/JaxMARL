@@ -1,7 +1,6 @@
 # experiment params
 # TODO: NUM_SEEDS JIT is broken, likely because of the for-loop I have
-# must keep this 1
-NUM_SEEDS: 1
+NUM_SEEDS: 1 # must keep this 1
 SEED: 76
 
 # wandb params
@@ -16,4 +15,3 @@ SAVE_PATH: baselines/imitation_learning/checkpoints
 VISUALIZE_FINAL_POLICY: True
 # number of seeds/envs to visualize
 VIZ_NUM_ENVS: 3
-# VIZ_NUM_SEEDS: 5

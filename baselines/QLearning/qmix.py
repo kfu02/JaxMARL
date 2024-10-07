@@ -741,7 +741,7 @@ def main(config):
 
             # build a list of states manually from vectorized seq returned by
             # make_train() for desired seeds/envs
-            for seed in range(config["VIZ_NUM_SEEDS"]):
+            for seed in range(config["NUM_SEEDS"]):
                 for env in range(config["VIZ_NUM_ENVS"]):
                     state_seq = []
                     for i in range(config["alg"]["NUM_STEPS"]):

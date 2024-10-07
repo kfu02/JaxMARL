@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from functools import partial
-from typing import NamedTuple, Dict, Union
+from typing import NamedTuple, Dict, Union, Callable
 
 import chex
 import optax
@@ -43,11 +43,92 @@ class Transition(NamedTuple):
     dones: dict
     infos: dict
 
-def expert_heuristic_simple_fire(valid_set_partitions, num_landmarks, obs_dict):
+def expert_heuristic_material_transport(obs_dict, cached_values):
     """
-    Expert policy to gather samples from.
+    Expert policy to gather samples from for HMT env.
     pi(obs) -> action for each agent/obs
+
+    Input: obs_dict = {agent_i : [timesteps, num_envs, obs_dim]}
+    Output: actions = {agent_i : [timesteps, num_envs]} (rather than outputting act_dim, directly output index of best action)
+
+    cached_values are unused.
     """
+    # Stack observations to be per-environment
+    all_obs = jnp.stack(list(obs_dict.values()))  # [n_agents, ?, n_envs, obs_dim]
+    all_obs = all_obs.squeeze(1)  # [n_agents, n_envs, obs_dim]
+    
+    n_agents, n_envs, obs_dim = all_obs.shape
+    
+    # action space
+    unit_vectors = jnp.array([[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]])  # [9, 2]
+
+    # split up observation based on below observation space construction 
+    # obs = jnp.concatenate([
+    #     ego_pos.flatten(),  # 2
+    #     rel_other_pos.flatten(),  # N-1, 2
+    #     ego_vel.flatten(),  # 2
+    #     rel_landmark_p_pos.flatten(), # 3, 2
+    #     state.site_quota.flatten() # 1
+    #     payload.flatten(), # 1
+    #     # NOTE: caps must go last for hypernet logic
+    #     ego_cap.flatten(),  # n_cap
+    #     other_cap.flatten(),  # N-1, n_cap
+    # ])
+
+    # landmark relative locations ordered [concrete depot, lumber depot, construction site]
+    landmark_start = (4 + (n_agents-1)*2)
+    landmark_end = landmark_start+(3*2)
+    rel_landmark_p_pos = all_obs[..., landmark_start:landmark_end].reshape(n_agents, n_envs, 3, 2)  # [n_agents, n_envs, 3, 2]
+
+    # site quota
+    quota_start = landmark_end
+    quota_end = landmark_end + 2
+    site_quota = all_obs[..., quota_start:quota_end]
+
+    # payload
+    payload_start = 2+(n_agents-1)*2+2+(3*2)+2
+    payload_end = payload_start + 2
+    payload = all_obs[..., payload_start:payload_end]  # [n_agents, n_envs]
+
+    # ego capability
+    ego_cap_start = payload_end
+    ego_cap = all_obs[..., ego_cap_start:ego_cap_start + 2]  # [n_agents, n_envs, 2]
+
+    # If payload == 0: move towards landmark idx = argmax(ego_cap), else move towards construction site
+    payload_mask = jnp.bitwise_and(payload[..., 0] == 0, payload[..., 1] == 0)
+    # site_quota_mask = jnp.bitwise_or(site_quota[..., 0] < 0, site_quota[..., 1] < 0)
+    # target_landmark_idx = jnp.where(jnp.bitwise_and(payload_mask, site_quota_mask), jnp.argmax(ego_cap, axis=-1), 2)  # [n_agents, n_envs]
+
+    target_landmark_idx = jnp.where(payload_mask, jnp.argmax(ego_cap, axis=-1), 2)  # [n_agents, n_envs]
+
+    # target_landmark_idx = jnp.ones((n_agents, n_envs)).astype(int)
+    
+    # get vectors to landmarks
+    target_landmark_rel_pos = jnp.take_along_axis(rel_landmark_p_pos, target_landmark_idx[..., None, None], axis=-2).squeeze(-2)  # [n_agents, n_envs, 2]
+    norm_direction = target_landmark_rel_pos / (jnp.linalg.norm(target_landmark_rel_pos, axis=-1, keepdims=True))
+
+    # get optimal direction
+    action_alignment = jnp.einsum('aij,bj->aib', norm_direction, unit_vectors)
+    optimal_actions = jnp.argmax(action_alignment, axis=-1)
+    # optimal_actions = jnp.where(near_target.squeeze(), jnp.zeros_like(optimal_actions), optimal_actions)
+    optimal_actions = optimal_actions.T
+    actions = {}
+    for i, agent_name in enumerate(obs_dict.keys()):
+        actions[agent_name] = optimal_actions[:, i]
+    
+    return actions
+
+def expert_heuristic_simple_fire(obs_dict, cached_values):
+    """
+    Expert policy to gather samples from for firefighting env.
+    pi(obs) -> action for each agent/obs
+
+    Input: obs_dict = {agent_i : [timesteps, num_envs, obs_dim]}
+    Output: actions = {agent_i : [timesteps, num_envs]} (rather than outputting act_dim, directly output index of best action)
+
+    cached_values are only there to help speed up computation.
+    """
+    valid_set_partitions, num_landmarks = cached_values["valid_set_partitions"], cached_values["num_landmarks"]
     num_agents = len(obs_dict)
 
     def solve_one_env(obs):
@@ -134,7 +215,7 @@ def expert_heuristic_simple_fire(valid_set_partitions, num_landmarks, obs_dict):
 
     return actions
 
-def make_train(config, log_train_env, log_test_env):
+def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, expert_cached_values: dict):
     """
     (1) collect 1 seed's worth of traj data with the expert heuristic and logs expert metrics
     (2) train an imitation learning policy to match the collected data (cross-entropy loss)
@@ -208,22 +289,6 @@ def make_train(config, log_train_env, log_test_env):
         # -------------------- --------------------
         # INIT EXPERT_BUFFER 
 
-        # for expert heuristic...
-        # find all partitions of a set of N agents into k fires, for use in heuristic
-        # pad with -1 until each partition is length N, in order to use JIT-compiled func
-        # (later when computing rew, we'll ensure -1 -> 0 reward)
-        N = log_train_env.num_agents
-        k = log_train_env.num_landmarks
-
-        lst = list(range(N))
-        all_set_partitions = [part for k in range(1, len(lst) + 1) for part in mit.set_partitions(lst, k)]
-        valid_set_partitions = []
-        for part in all_set_partitions:
-            if len(part) == k:
-                fixed_len_part = [jnp.pad(jnp.array(p), (0, N-len(p)), constant_values=(-1,)) for p in part]
-                valid_set_partitions.append(fixed_len_part)
-        valid_set_partitions = jnp.array(valid_set_partitions)
-
         # randomly sample 1 trajectory to learn the structure, needed to init flashbax buffers
         def _env_sample_step(env_state, unused):
             rng, key_a, key_s = jax.random.split(jax.random.PRNGKey(0), 3) # use a dummy rng here
@@ -272,7 +337,7 @@ def make_train(config, log_train_env, log_test_env):
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
 
-                actions = expert_heuristic_simple_fire(valid_set_partitions, log_train_env.num_landmarks, obs_)
+                actions = expert_heuristic(obs_, expert_cached_values)
                 actions = jax.tree.map(lambda x: x.squeeze(0), actions) # rm dummy time_step dim
 
                 # step in env with action
@@ -302,14 +367,24 @@ def make_train(config, log_train_env, log_test_env):
 
             # compute metrics for this trajectory
             final_env_state = step_state[0].env_state
-            fire_metrics = fire_env_metrics(final_env_state)
-
             rewards = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), traj_batch.rewards)
-            metrics = {
-                "returns": rewards['__all__'].mean(),
-                "fire_success_rate": fire_metrics[0],
-                "pct_fires_put_out": fire_metrics[1],
-            }
+            
+            if config["env"]["ENV_NAME"] == "MPE_simple_fire":
+                fire_metrics = fire_env_metrics(final_env_state)
+                metrics = {
+                    "returns": rewards['__all__'].mean(),
+                    "fire_success_rate": fire_metrics[0],
+                    "pct_fires_put_out": fire_metrics[1],
+                }
+            if config["env"]["ENV_NAME"] == "MPE_simple_transport":
+                info_metrics = {
+                    'quota_met': jnp.max(traj_batch.infos['quota_met'], axis=0),
+                    'makespan': jnp.min(traj_batch.infos['makespan'], axis=0)
+                }
+                metrics = {
+                    "returns": rewards['__all__'].mean(),
+                    **info_metrics,
+                }
 
             # update the expert_buffer state to include this traj
             expert_buffer_traj_batch = jax.tree_util.tree_map(
@@ -492,7 +567,7 @@ def make_train(config, log_train_env, log_test_env):
                 h_state, policy_action_logits = homogeneous_pass(train_state.params['agent'], last_h, obs_, dones_)
                 policy_actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), policy_action_logits, wrapped_env.valid_actions)
 
-                expert_actions = expert_heuristic_simple_fire(valid_set_partitions, log_train_env.num_landmarks, obs_)
+                expert_actions = expert_heuristic(obs_, expert_cached_values)
                 expert_actions = jax.tree.map(lambda x: x.squeeze(0), expert_actions) # rm dummy time_step dim
 
                 # pick expert actions with probability beta, else choose learned policy
@@ -679,13 +754,23 @@ def make_train(config, log_train_env, log_test_env):
             
             # compute metrics for this trajectory
             final_env_state = policy_step_state[1].env_state
-            fire_metrics = fire_env_metrics(final_env_state)
             rewards = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), policy_traj_batch.rewards)
-            policy_metrics = {
-                "returns": rewards['__all__'].mean(),
-                "fire_success_rate": fire_metrics[0],
-                "pct_fires_put_out": fire_metrics[1],
-            }
+            if config["env"]["ENV_NAME"] == "MPE_simple_fire":
+                fire_metrics = fire_env_metrics(final_env_state)
+                metrics = {
+                    "returns": rewards['__all__'].mean(),
+                    "fire_success_rate": fire_metrics[0],
+                    "pct_fires_put_out": fire_metrics[1],
+                }
+            if config["env"]["ENV_NAME"] == "MPE_simple_transport":
+                info_metrics = {
+                    'quota_met': jnp.max(policy_traj_batch.infos['quota_met'], axis=0),
+                    'makespan': jnp.min(policy_traj_batch.infos['makespan'], axis=0)
+                }
+                metrics = {
+                    "returns": rewards['__all__'].mean(),
+                    **info_metrics,
+                }
 
             return policy_metrics, policy_viz_env_states
 
@@ -823,10 +908,37 @@ def main(config):
         mode=config["WANDB_MODE"],
     )
     
+    # pick the correct expert heuristic, based on env
+    expert_heuristic = None
+    expert_cached_values = None
+    env_name = config['env']['ENV_NAME']
+    if env_name == "MPE_simple_fire":
+        expert_heuristic = expert_heuristic_simple_fire
+
+        # find all partitions of a set of N agents into k fires, for use in heuristic
+        # pad with -1 until each partition is length N, in order to use JIT-compiled func
+        # (later when computing rew, we'll ensure -1 -> 0 reward)
+        N = log_train_env.num_agents
+        k = log_train_env.num_landmarks
+
+        lst = list(range(N))
+        all_set_partitions = [part for k in range(1, len(lst) + 1) for part in mit.set_partitions(lst, k)]
+        valid_set_partitions = []
+        for part in all_set_partitions:
+            if len(part) == k:
+                fixed_len_part = [jnp.pad(jnp.array(p), (0, N-len(p)), constant_values=(-1,)) for p in part]
+                valid_set_partitions.append(fixed_len_part)
+        valid_set_partitions = jnp.array(valid_set_partitions)
+        expert_cached_values = {"valid_set_partitions": valid_set_partitions, "num_landmarks": k}
+
+    elif env_name == "MPE_material_transport":
+        expert_heuristic = expert_heuristic_material_transport
+        expert_cached_values = {}
+
     # collect one full expert_buffer, then train a policy on that expert_buffer (for each seed)
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env)))
+    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env, expert_heuristic, expert_cached_values)))
     outs = jax.block_until_ready(train_vjit(rngs))
 
     expert_traj_count = outs["expert_runner_state"][0]
