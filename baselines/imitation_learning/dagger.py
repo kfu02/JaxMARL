@@ -367,14 +367,24 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
 
             # compute metrics for this trajectory
             final_env_state = step_state[0].env_state
-            fire_metrics = fire_env_metrics(final_env_state)
-
             rewards = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), traj_batch.rewards)
-            metrics = {
-                "returns": rewards['__all__'].mean(),
-                "fire_success_rate": fire_metrics[0],
-                "pct_fires_put_out": fire_metrics[1],
-            }
+            
+            if config["env"]["ENV_NAME"] == "MPE_simple_fire":
+                fire_metrics = fire_env_metrics(final_env_state)
+                metrics = {
+                    "returns": rewards['__all__'].mean(),
+                    "fire_success_rate": fire_metrics[0],
+                    "pct_fires_put_out": fire_metrics[1],
+                }
+            if config["env"]["ENV_NAME"] == "MPE_simple_transport":
+                info_metrics = {
+                    'quota_met': jnp.max(traj_batch.infos['quota_met'], axis=0),
+                    'makespan': jnp.min(traj_batch.infos['makespan'], axis=0)
+                }
+                metrics = {
+                    "returns": rewards['__all__'].mean(),
+                    **info_metrics,
+                }
 
             # update the expert_buffer state to include this traj
             expert_buffer_traj_batch = jax.tree_util.tree_map(
@@ -744,13 +754,23 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
             
             # compute metrics for this trajectory
             final_env_state = policy_step_state[1].env_state
-            fire_metrics = fire_env_metrics(final_env_state)
             rewards = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), policy_traj_batch.rewards)
-            policy_metrics = {
-                "returns": rewards['__all__'].mean(),
-                "fire_success_rate": fire_metrics[0],
-                "pct_fires_put_out": fire_metrics[1],
-            }
+            if config["env"]["ENV_NAME"] == "MPE_simple_fire":
+                fire_metrics = fire_env_metrics(final_env_state)
+                metrics = {
+                    "returns": rewards['__all__'].mean(),
+                    "fire_success_rate": fire_metrics[0],
+                    "pct_fires_put_out": fire_metrics[1],
+                }
+            if config["env"]["ENV_NAME"] == "MPE_simple_transport":
+                info_metrics = {
+                    'quota_met': jnp.max(policy_traj_batch.infos['quota_met'], axis=0),
+                    'makespan': jnp.min(policy_traj_batch.infos['makespan'], axis=0)
+                }
+                metrics = {
+                    "returns": rewards['__all__'].mean(),
+                    **info_metrics,
+                }
 
             return policy_metrics, policy_viz_env_states
 
