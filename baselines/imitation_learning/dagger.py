@@ -114,7 +114,7 @@ def expert_heuristic_material_transport(obs_dict, cached_values):
     optimal_actions = optimal_actions.T
     actions = {}
     for i, agent_name in enumerate(obs_dict.keys()):
-        actions[agent_name] = optimal_actions[:, i]
+        actions[agent_name] = optimal_actions[:, i].reshape(1,-1)   # make compatible with squeeze in training loop
     
     return actions
 
@@ -215,7 +215,7 @@ def expert_heuristic_simple_fire(obs_dict, cached_values):
 
     return actions
 
-def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, expert_cached_values: dict):
+def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, expert_cached_values: dict, env_name="MPE_simple_fire"):
     """
     (1) collect 1 seed's worth of traj data with the expert heuristic and logs expert metrics
     (2) train an imitation learning policy to match the collected data (cross-entropy loss)
@@ -369,17 +369,17 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
             final_env_state = step_state[0].env_state
             rewards = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), traj_batch.rewards)
             
-            if config["env"]["ENV_NAME"] == "MPE_simple_fire":
+            if env_name == "MPE_simple_fire":
                 fire_metrics = fire_env_metrics(final_env_state)
                 metrics = {
                     "returns": rewards['__all__'].mean(),
                     "fire_success_rate": fire_metrics[0],
                     "pct_fires_put_out": fire_metrics[1],
                 }
-            if config["env"]["ENV_NAME"] == "MPE_simple_transport":
+            if env_name == "MPE_simple_transport":
                 info_metrics = {
-                    'quota_met': jnp.max(traj_batch.infos['quota_met'], axis=0),
-                    'makespan': jnp.min(traj_batch.infos['makespan'], axis=0)
+                    'quota_met': jnp.max(traj_batch.infos['quota_met'], axis=0).mean(),
+                    'makespan': jnp.min(traj_batch.infos['makespan'], axis=0).mean()
                 }
                 metrics = {
                     "returns": rewards['__all__'].mean(),
@@ -419,11 +419,18 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
         # put INIT_EXPERT_TRAJ trajectories into buffer
         rng, _rng = jax.random.split(rng)
         traj_count = 0
-        sample_metrics = {
-            "returns": 0,
-            "fire_success_rate": 0,
-            "pct_fires_put_out": 0,
-        }
+        if env_name == "MPE_simple_fire":
+            sample_metrics = {
+                "returns": 0,
+                "fire_success_rate": 0,
+                "pct_fires_put_out": 0,
+            }
+        if env_name == "MPE_simple_transport":
+            sample_metrics = {
+                "returns": 0,
+                "quota_met": 0,
+                "makespan": 0
+            }
         expert_runner_state = (
             # init state before lax.scan
             traj_count,
@@ -755,19 +762,19 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
             # compute metrics for this trajectory
             final_env_state = policy_step_state[1].env_state
             rewards = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0).mean(), policy_traj_batch.rewards)
-            if config["env"]["ENV_NAME"] == "MPE_simple_fire":
+            if env_name == "MPE_simple_fire":
                 fire_metrics = fire_env_metrics(final_env_state)
-                metrics = {
+                policy_metrics = {
                     "returns": rewards['__all__'].mean(),
                     "fire_success_rate": fire_metrics[0],
                     "pct_fires_put_out": fire_metrics[1],
                 }
-            if config["env"]["ENV_NAME"] == "MPE_simple_transport":
+            if env_name == "MPE_simple_transport":
                 info_metrics = {
                     'quota_met': jnp.max(policy_traj_batch.infos['quota_met'], axis=0),
                     'makespan': jnp.min(policy_traj_batch.infos['makespan'], axis=0)
                 }
-                metrics = {
+                policy_metrics = {
                     "returns": rewards['__all__'].mean(),
                     **info_metrics,
                 }
@@ -853,6 +860,8 @@ def visualize_states(save_dir, alg_name, viz_test_env, config, viz_env_states, p
                     accel=viz_env_states.accel[seed, i, env, ...],
                     rad=viz_env_states.rad[seed, i, env, ...],
                     done=viz_env_states.done[seed, i, env, ...],
+                    capacity=viz_env_states.capacity[seed, i, env, ...],
+                    site_quota=viz_env_states.site_quota[seed, i, env, ...],
                     step=i,
                 )
                 state_seq.append(this_step_state)
@@ -931,14 +940,14 @@ def main(config):
         valid_set_partitions = jnp.array(valid_set_partitions)
         expert_cached_values = {"valid_set_partitions": valid_set_partitions, "num_landmarks": k}
 
-    elif env_name == "MPE_material_transport":
+    elif env_name == "MPE_simple_transport":
         expert_heuristic = expert_heuristic_material_transport
         expert_cached_values = {}
 
     # collect one full expert_buffer, then train a policy on that expert_buffer (for each seed)
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
-    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env, expert_heuristic, expert_cached_values)))
+    train_vjit = jax.jit(jax.vmap(make_train(config["alg"], log_train_env, log_test_env, expert_heuristic, expert_cached_values, env_name)))
     outs = jax.block_until_ready(train_vjit(rngs))
 
     expert_traj_count = outs["expert_runner_state"][0]

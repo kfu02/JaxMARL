@@ -12,7 +12,7 @@ ENV_KWARGS:
   num_capabilities: 2
   num_agents: 4
 
-  site_quota: [5., 5.]
+  site_quota: [4., 4.]
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
   agent_rads: [0.2, 0.2, 0.2, 0.2]
