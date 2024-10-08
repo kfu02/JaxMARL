@@ -849,21 +849,34 @@ def visualize_states(save_dir, alg_name, viz_test_env, config, viz_env_states, p
 
     Then build MPEVisualizer and log to Wandb.
     """
+    env_name = config["env"]["ENV_NAME"]
     for seed in range(config["NUM_SEEDS"]):
         for env in range(config["VIZ_NUM_ENVS"]):
             state_seq = []
             for i in range(config["alg"]["NUM_STEPS"]):
-                this_step_state = State(
-                    p_pos=viz_env_states.p_pos[seed, i, env, ...],
-                    p_vel=viz_env_states.p_vel[seed, i, env, ...],
-                    c=viz_env_states.c[seed, i, env, ...],
-                    accel=viz_env_states.accel[seed, i, env, ...],
-                    rad=viz_env_states.rad[seed, i, env, ...],
-                    done=viz_env_states.done[seed, i, env, ...],
-                    capacity=viz_env_states.capacity[seed, i, env, ...],
-                    site_quota=viz_env_states.site_quota[seed, i, env, ...],
-                    step=i,
-                )
+                if env_name == "MPE_simple_fire":
+                    this_step_state = State(
+                        p_pos=viz_env_states.p_pos[seed, i, env, ...],
+                        p_vel=viz_env_states.p_vel[seed, i, env, ...],
+                        c=viz_env_states.c[seed, i, env, ...],
+                        accel=viz_env_states.accel[seed, i, env, ...],
+                        rad=viz_env_states.rad[seed, i, env, ...],
+                        done=viz_env_states.done[seed, i, env, ...],
+                        step=i,
+                    )
+                    state_seq.append(this_step_state)
+                if env_name == "MPE_simple_transport":
+                    this_step_state = State(
+                        p_pos=viz_env_states.p_pos[seed, i, env, ...],
+                        p_vel=viz_env_states.p_vel[seed, i, env, ...],
+                        c=viz_env_states.c[seed, i, env, ...],
+                        accel=viz_env_states.accel[seed, i, env, ...],
+                        rad=viz_env_states.rad[seed, i, env, ...],
+                        done=viz_env_states.done[seed, i, env, ...],
+                        capacity=viz_env_states.capacity[seed, i, env, ...],
+                        site_quota=viz_env_states.site_quota[seed, i, env, ...],
+                        step=i,
+                    )
                 state_seq.append(this_step_state)
 
             # save visualization to GIF for wandb display
