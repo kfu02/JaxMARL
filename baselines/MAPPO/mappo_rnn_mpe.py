@@ -64,7 +64,7 @@ class MPEWorldStateWrapper(JaxMARLWrapper):
     
     def world_state_size(self):
         spaces = [self._env.observation_space(agent) for agent in self._env.agents]
-        return sum([space.shape[-1] for space in spaces])
+        return sum([space.shape for space in spaces])
 
 class ScannedRNN(nn.Module):
     @functools.partial(
@@ -121,6 +121,72 @@ class ActorRNN(nn.Module):
 
         return hidden, pi
 
+class ActorHyperRNN(nn.Module):
+    # homogenous agent for parameters sharing, assumes all agents have same obs and action dim
+    action_dim: int
+    hidden_dim: int
+    init_scale: float
+    hypernet_dim: int
+    hypernet_init_scale: int
+    dim_capabilities: int # per team
+
+    @nn.compact
+    def __call__(self, hidden, x, train=True):
+        orig_obs, dones = x
+
+        # separate obs into capabilities and observations
+        # (env gives obs = orig obs+cap)
+        # NOTE: this is hardcoded to match simple_spread's computation
+        cap = orig_obs[:, :, -self.dim_capabilities:]
+        obs = orig_obs[:, :, :-self.dim_capabilities]
+
+        time_steps, batch_size, obs_dim = obs.shape
+
+        # RNN 
+        embedding = nn.Dense(
+            self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(obs)
+        embedding = nn.relu(embedding)
+
+        rnn_in = (embedding, dones)
+        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+
+        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(2), bias_init=constant(0.0))(
+            embedding
+        )
+        actor_mean = nn.relu(actor_mean)
+
+        # hypernet
+        num_weights = (self.hidden_dim * self.action_dim)
+        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
+        weights = weight_hypernet(orig_obs).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
+
+        num_biases = self.action_dim
+        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
+        biases = bias_hypernet(orig_obs).reshape(time_steps, batch_size, 1, self.action_dim)
+
+        # manually calculate logits = (embedding @ weights) + b
+        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
+        # with leading dims for time_steps, batch_size
+        action_logits = jnp.matmul(actor_mean[:, :, None, :], weights) + biases
+        action_logits = action_logits.squeeze(axis=2) # remove extra dim needed for computation
+
+        pi = distrax.Categorical(logits=action_logits)
+
+        return hidden, pi
+
+class HyperNetwork(nn.Module):
+    """HyperNetwork for generating weights of QMix' mixing network."""
+    hidden_dim: int
+    output_dim: int
+    init_scale: float
+
+    @nn.compact
+    def __call__(self, x):
+        x = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(x)
+        x = nn.relu(x)
+        x = nn.Dense(self.output_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(x)
+        return x
 
 class CriticRNN(nn.Module):
     config: Dict
@@ -192,11 +258,22 @@ def make_train(config):
 
     def train(rng):
         # INIT NETWORK
-        actor_network = ActorRNN(env.action_space(env.agents[0]).n, config=config)
+        if config["AGENT_HYPERAWARE"]:
+            actor_network = ActorHyperRNN(
+                action_dim=env.action_space(env.agents[0]).n,
+                hidden_dim=config["GRU_HIDDEN_DIM"],
+                init_scale=config['AGENT_INIT_SCALE'],
+                hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"],
+                hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"],
+                dim_capabilities=env.dim_capabilities
+            )
+        else:
+            actor_network = ActorRNN(env.action_space(env.agents[0]).n, config=config)
+
         critic_network = CriticRNN(config=config)
         rng, _rng_actor, _rng_critic = jax.random.split(rng, 3)
         ac_init_x = (
-            jnp.zeros((1, config["NUM_ENVS"], env.observation_space(env.agents[0]).shape[0])),
+            jnp.zeros((1, config["NUM_ENVS"], env.observation_space(env.agents[0]).shape)),
             jnp.zeros((1, config["NUM_ENVS"])),
         )
         ac_init_hstate = ScannedRNN.initialize_carry(config["NUM_ENVS"], config["GRU_HIDDEN_DIM"])
@@ -538,14 +615,14 @@ def main(config):
     wandb.init(
         entity=config["ENTITY"],
         project=config["PROJECT"],
-        tags=["MAPPO", "RNN", config["ENV_NAME"]],
+        tags=["MAPPO", "RNN", config["ENV_NAME"]] + [config['tag']] if 'tag' in config else [],
         config=config,
         mode=config["WANDB_MODE"],
     )
     rng = jax.random.PRNGKey(config["SEED"])
-    with jax.disable_jit(False):
-        train_jit = jax.jit(make_train(config)) 
-        out = train_jit(rng)
+    rngs = jax.random.split(rng, config["NUM_SEEDS"])
+    train_vjit = jax.jit(jax.vmap(make_train(config)))
+    outs = jax.block_until_ready(train_vjit(rngs))
 
     
 if __name__=="__main__":

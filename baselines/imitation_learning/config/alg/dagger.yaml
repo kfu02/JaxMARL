@@ -1,4 +1,3 @@
-
 # NOTE: NUM_STEPS (max_steps_per_env) defined by env.yaml
 NUM_ENVS: 4
 

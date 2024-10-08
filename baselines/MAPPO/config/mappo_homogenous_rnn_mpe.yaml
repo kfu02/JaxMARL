@@ -1,26 +1,45 @@
-"LR": 2e-3
-"NUM_ENVS": 16 
-"NUM_STEPS": 128 
-"TOTAL_TIMESTEPS": 2e7
-"FC_DIM_SIZE": 128
-"GRU_HIDDEN_DIM": 128
-"UPDATE_EPOCHS": 4
-"NUM_MINIBATCHES": 4
-"GAMMA": 0.99
-"GAE_LAMBDA": 0.95
-"CLIP_EPS": 0.2
-"SCALE_CLIP_EPS": False
-"ENT_COEF": 0.01
-"VF_COEF": 0.5
-"MAX_GRAD_NORM": 0.5
-"ACTIVATION": "tanh"
-"ENV_NAME": "MPE_simple_spread_v3"
-"SEED": 1
-"NUM_SEEDS": 2
-"ENV_KWARGS": {}
-"ANNEAL_LR": True
+LR: 2e-3
+NUM_ENVS: 16 
+NUM_STEPS: 128 
+TOTAL_TIMESTEPS: 4e6
+FC_DIM_SIZE: 128
+GRU_HIDDEN_DIM: 128
+UPDATE_EPOCHS: 4
+NUM_MINIBATCHES: 4
+GAMMA: 0.99
+GAE_LAMBDA: 0.95
+CLIP_EPS: 0.2
+SCALE_CLIP_EPS: False
+ENT_COEF: 0.01
+VF_COEF: 0.5
+MAX_GRAD_NORM: 0.5
+ACTIVATION: tanh
+
+AGENT_INIT_SCALE: 2.
+AGENT_HYPERAWARE: True
+AGENT_HYPERNET_HIDDEN_DIM: 32 # width of hypernet
+AGENT_HYPERNET_INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
+
+ENV_NAME: MPE_simple_transport # MPE_simple_spread_v3
+SEED: 1
+NUM_SEEDS: 5
+ENV_KWARGS: {
+  agent_rads: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2],
+  agent_accels: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
+  agent_capacities: [[0.18982161, 0.81017839],
+                     [0.29007672, 0.70992328],
+                     [0.39633298, 0.60366702],
+                     [0.56738995, 0.43261005],
+                     [0.21590217, 0.78409783],
+                     [0.89497965, 0.10502035],
+                     [0.77398882, 0.22601118],
+                     [0.22818673, 0.77181327],
+                     [0.47184828, 0.52815172],
+                     [0.44097518, 0.55902482]]
+}
+ANNEAL_LR: True
 
 # WandB Params
-"WANDB_MODE": "disabled"
-"ENTITY": ""
-"PROJECT": ""
+ENTITY: star-lab-gt
+PROJECT: JaxMARL
+WANDB_MODE: online

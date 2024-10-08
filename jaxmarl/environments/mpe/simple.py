@@ -25,12 +25,14 @@ class State:
     p_pos: chex.Array  # [num_entities, [x, y]]
     p_vel: chex.Array  # [n, [x, y]]
     c: chex.Array  # communication state [num_agents, [dim_c]]
-    accel: chex.Array # [n, 1] representing accel applied to actions
-    rad: chex.Array # [n, 1] representing rad of each entity (first agents, then landmarks)
     done: chex.Array  # bool [num_agents, ]
     step: int  # current step
     goal: int = None  # index of target landmark, used in: SimpleSpeakerListenerMPE, SimpleReferenceMPE, SimplePushMPE, SimpleAdversaryMPE
-
+    accel: chex.Array = None # [n, 1] representing accel applied to actions
+    rad: chex.Array = None # [n, 1] representing rad of each entity (first agents, then landmarks)
+    payload: chex.Array = None # [n, 2] representing agent's current payload, used in: SimpleTransport
+    capacity: chex.Array = None # [n, 2] representing agent's carrying capacity, used in: SimpleTransport
+    site_quota: chex.Array = None # [2] representing remaining materials needed to meet quota, used in: SimpleTransport
 
 class SimpleMPE(MultiAgentEnv):
     def __init__(
@@ -134,6 +136,18 @@ class SimpleMPE(MultiAgentEnv):
             self.agent_accels = kwargs["agent_accels"]
             # assert (len(self.agent_accels) >= self.num_agents), f"Not enough agent_accels, {len(self.agent_accels)} < {self.num_agents}"
             self.agent_accels = jnp.array(self.agent_accels)
+        
+        if "agent_capacities" in kwargs:
+            self.agent_capacities = kwargs["agent_capacities"]
+            self.agent_capacities = jnp.array(self.agent_capacities)
+        else:
+            self.agent_capacities = None
+
+        if "site_quota" in kwargs:
+            self.site_quota = kwargs["site_quota"]
+            self.site_quota = -jnp.array(self.site_quota)
+        else:
+            self.site_quota = None
 
         if "moveable" in kwargs:
             self.moveable = kwargs["moveable"]
@@ -283,8 +297,10 @@ class SimpleMPE(MultiAgentEnv):
         # if self.test_env_flag and self.test_capabilities is not None:
         #     team_capabilities = jnp.asarray(self.test_capabilities)
 
+        
         agent_rads = self.agent_rads[selected_agents]
         agent_accels = self.agent_accels[selected_agents]
+        agent_capacities = self.agent_capacities[selected_agents] if self.agent_capacities else np.zeros((self.num_agents, 2))
 
         state = State(
             p_pos=p_pos,
@@ -297,6 +313,8 @@ class SimpleMPE(MultiAgentEnv):
             ),
             done=jnp.full((self.num_agents), False),
             step=0,
+            payload=jnp.zeros((self.num_agents, 1)),
+            capacity=agent_capacities,
         )
 
         return self.get_obs(state), state

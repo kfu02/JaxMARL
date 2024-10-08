@@ -1,0 +1,28 @@
+ENV_NAME: MPE_simple_transport
+ENV_KWARGS:
+  max_steps: 100 # 25
+
+  # reward shaping
+  lumber_pickup_reward: 2.5 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
+  concrete_pickup_reward: 2.5 # reward given to an agent for pickup of concrete if their capacity is > 0.
+  dropoff_reward: 10 # the amount of reward an agent gets for dropping off a resource
+
+  # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
+  capability_aware: True # T/F
+  num_capabilities: 2
+  num_agents: 4
+
+  site_quota: [4., 4.]
+
+  # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
+  agent_rads: [0.2, 0.2, 0.2, 0.2]
+  agent_accels: [2, 2, 2, 2]
+  agent_capacities: [[1., 0.], [0., 1.], [1., 0.], [0., 1.]]
+
+  # agent_rads: [0.05]
+  # agent_accels: [1]
+  # agent_capacities: [[0.0, 1.0]]
+
+  # test_team:
+  #   agent_capacities: [[0.1, 0.9], [0.5, 0.5], [0.5, 0.5], [0.9, 0.1]]
+
