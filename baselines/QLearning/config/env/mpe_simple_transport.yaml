@@ -14,7 +14,6 @@ ENV_KWARGS:
   num_agents: 4
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
-  # NOTE: hijacking agent_rads = firefighting capability
   agent_rads: [0.1, 0.1, 0.1, 0.1]
   agent_accels: [2, 2, 2, 2]
   agent_capacities: [[1.0, 0.0], [0.0, 1.0], [0.75, 0.25], [0.25, 0.75], [0.5, 0.5]]
