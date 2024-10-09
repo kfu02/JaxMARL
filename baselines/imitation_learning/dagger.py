@@ -33,6 +33,7 @@ from jaxmarl.environments.mpe import MPEVisualizer
 from jaxmarl.environments.mpe.simple import State
 
 from jaxmarl.policies import ScannedRNN, AgentMLP, AgentHyperMLP, AgentRNN, AgentHyperRNN, HyperNetwork
+from jaxmarl.utils import snd
 
 import more_itertools as mit
 
@@ -42,6 +43,14 @@ class Transition(NamedTuple):
     rewards: dict
     dones: dict
     infos: dict
+
+class TransitionHstate(NamedTuple):
+    obs: dict
+    actions: dict
+    rewards: dict
+    dones: dict
+    infos: dict
+    hstate: dict
 
 def expert_heuristic_material_transport(obs_dict, cached_values):
     """
@@ -742,7 +751,7 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
 
                 # step in env with action
                 obs, env_state, rewards, dones, infos = test_env.batch_step(key_s, env_state, actions)
-                transition = Transition(last_obs, actions, rewards, dones, infos) # last_obs is right (at last_obs, take this action)
+                transition = TransitionHstate(last_obs, actions, rewards, dones, infos, h_state) # last_obs is right (at last_obs, take this action)
 
                 # update step_state for next step, return collected transition/viz_env_state to be aggregated
                 step_state = (policy_params, env_state, obs, dones, h_state, rng)
@@ -758,6 +767,16 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
             policy_step_state, (policy_traj_batch, policy_viz_env_states) = jax.lax.scan(
                 _policy_env_step, policy_step_state, None, config["NUM_STEPS"]
             )
+
+            # get snd, NOTE: dim_c multiplier is currently hardcoded since it works for both fire and transport 
+            snd_value = snd(
+                rollouts=policy_traj_batch.obs,
+                hiddens=policy_traj_batch.hstate,
+                dim_c=len(test_env.training_agents)*2,
+                params=policy_step_state[0],
+                policy='qmix',
+                agent=agent
+            )
             
             # compute metrics for this trajectory
             final_env_state = policy_step_state[1].env_state
@@ -766,6 +785,7 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
                 fire_metrics = fire_env_metrics(final_env_state)
                 policy_metrics = {
                     "returns": rewards['__all__'].mean(),
+                    "snd": snd_value,
                     "fire_success_rate": fire_metrics[0],
                     "pct_fires_put_out": fire_metrics[1],
                 }
@@ -776,6 +796,7 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
                 }
                 policy_metrics = {
                     "returns": rewards['__all__'].mean(),
+                    "snd": snd_value,
                     **info_metrics,
                 }
 
