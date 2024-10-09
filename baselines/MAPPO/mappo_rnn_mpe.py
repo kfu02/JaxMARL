@@ -24,6 +24,7 @@ from jaxmarl.environments.multi_agent_env import MultiAgentEnv, State
 import wandb
 import functools
 import matplotlib.pyplot as plt
+from jaxmarl.policies import HyperNetwork
 
     
 class MPEWorldStateWrapper(JaxMARLWrapper):
@@ -126,9 +127,34 @@ class ActorHyperRNN(nn.Module):
     action_dim: int
     hidden_dim: int
     init_scale: float
-    hypernet_dim: int
-    hypernet_init_scale: int
     dim_capabilities: int # per team
+    hypernet_kwargs: dict
+
+    def hyper_forward(self, in_dim, out_dim, target_in, hyper_in, time_steps, batch_size):
+        """
+        Compute y = xW + b where W/b are created by a hypernetwork.
+
+        in_dim : dimension of target input x
+        out_dim : dimension of target output y
+        target_in : target input
+        hyper_in : input to hypernet
+
+        time_steps/batch_size : parallel dims
+        """
+        num_weights = (in_dim * out_dim)
+        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_kwargs["HIDDEN_DIM"], output_dim=num_weights, init_scale=self.hypernet_kwargs["INIT_SCALE"], num_layers=self.hypernet_kwargs["NUM_LAYERS"], use_layer_norm=self.hypernet_kwargs["USE_LAYER_NORM"])
+        weights = weight_hypernet(hyper_in).reshape(time_steps, batch_size, in_dim, out_dim)
+
+        num_biases = out_dim
+        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_kwargs["HIDDEN_DIM"], output_dim=num_biases, init_scale=0, num_layers=self.hypernet_kwargs["NUM_LAYERS"], use_layer_norm=self.hypernet_kwargs["USE_LAYER_NORM"])
+        biases = bias_hypernet(hyper_in).reshape(time_steps, batch_size, 1, out_dim)
+
+        # compute y = xW + b
+        # NOTE: slicing here expands embedding to be (1, in_dim) @ (in_dim, out_dim)
+        # with leading dims for time_steps, batch_size
+        target_out = jnp.matmul(target_in[:, :, None, :], weights) + biases
+        target_out = target_out.squeeze(axis=2) # remove extra dim needed for computation
+        return target_out
 
     @nn.compact
     def __call__(self, hidden, x, train=True):
@@ -151,42 +177,20 @@ class ActorHyperRNN(nn.Module):
         rnn_in = (embedding, dones)
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
 
-        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(2), bias_init=constant(0.0))(
-            embedding
-        )
+        # actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(2), bias_init=constant(0.0))(
+        #     embedding
+        # )
+        # actor_mean = nn.relu(actor_mean)
+        actor_mean = self.hyper_forward(self.hidden_dim, self.hidden_dim, embedding, orig_obs, time_steps, batch_size)
         actor_mean = nn.relu(actor_mean)
 
-        # hypernet
-        num_weights = (self.hidden_dim * self.action_dim)
-        weight_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_weights, init_scale=self.hypernet_init_scale)
-        weights = weight_hypernet(orig_obs).reshape(time_steps, batch_size, self.hidden_dim, self.action_dim)
-
-        num_biases = self.action_dim
-        bias_hypernet = HyperNetwork(hidden_dim=self.hypernet_dim, output_dim=num_biases, init_scale=0)
-        biases = bias_hypernet(orig_obs).reshape(time_steps, batch_size, 1, self.action_dim)
-
-        # manually calculate logits = (embedding @ weights) + b
-        # NOTE: slicing here expands embedding to be (1, embed_dim) @ (embed_dim, act_dim)
-        # with leading dims for time_steps, batch_size
-        action_logits = jnp.matmul(actor_mean[:, :, None, :], weights) + biases
-        action_logits = action_logits.squeeze(axis=2) # remove extra dim needed for computation
+        action_logits = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(actor_mean)
 
         pi = distrax.Categorical(logits=action_logits)
 
         return hidden, pi
-
-class HyperNetwork(nn.Module):
-    """HyperNetwork for generating weights of QMix' mixing network."""
-    hidden_dim: int
-    output_dim: int
-    init_scale: float
-
-    @nn.compact
-    def __call__(self, x):
-        x = nn.Dense(self.hidden_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(x)
-        x = nn.relu(x)
-        x = nn.Dense(self.output_dim, kernel_init=orthogonal(self.init_scale), bias_init=constant(0.))(x)
-        return x
 
 class CriticRNN(nn.Module):
     config: Dict
@@ -263,8 +267,7 @@ def make_train(config):
                 action_dim=env.action_space(env.agents[0]).n,
                 hidden_dim=config["GRU_HIDDEN_DIM"],
                 init_scale=config['AGENT_INIT_SCALE'],
-                hypernet_dim=config["AGENT_HYPERNET_HIDDEN_DIM"],
-                hypernet_init_scale=config["AGENT_HYPERNET_INIT_SCALE"],
+                hypernet_kwargs=config['AGENT_HYPERNET_KWARGS'],
                 dim_capabilities=env.dim_capabilities
             )
         else:
@@ -360,7 +363,15 @@ def make_train(config):
                 obsv, env_state, reward, done, info = jax.vmap(
                     env.step, in_axes=(0, 0, 0)
                 )(rng_step, env_state, env_act)
+
+                # TODO: bugfix info issue with HMT, this is a bandaid
+                # issue stems from metrics being team-wise (16,1,1) but other stats being per-agent (16,4)
+                # print("info", info)
+                info.pop("makespan")
+                info.pop("quota_met")
+
                 info = jax.tree_map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
+
                 done_batch = batchify(done, env.agents, config["NUM_ACTORS"]).squeeze()
                 transition = Transition(
                     jnp.tile(done["__all__"], env.num_agents),
@@ -579,9 +590,8 @@ def make_train(config):
                 wandb.log(
                     {
                         "returns": metric["returned_episode_returns"][-1, :].mean(),
-                        "env_step": metric["update_steps"]
-                        * config["NUM_ENVS"]
-                        * config["NUM_STEPS"],
+                        "env_step": metric["update_steps"] * config["NUM_ENVS"] * config["NUM_STEPS"],
+                        "timestep": metric["update_steps"] * config["NUM_ENVS"] * config["NUM_STEPS"],
                         **metric["loss"],
                     }
                 )
@@ -623,6 +633,9 @@ def main(config):
     rngs = jax.random.split(rng, config["NUM_SEEDS"])
     train_vjit = jax.jit(jax.vmap(make_train(config)))
     outs = jax.block_until_ready(train_vjit(rngs))
+
+    # force multiruns to finish correctly
+    wandb.finish()
 
     
 if __name__=="__main__":

@@ -1,7 +1,8 @@
 LR: 2e-3
+ANNEAL_LR: True
 NUM_ENVS: 16 
 NUM_STEPS: 128 
-TOTAL_TIMESTEPS: 4e6
+TOTAL_TIMESTEPS: 10e6
 FC_DIM_SIZE: 128
 GRU_HIDDEN_DIM: 128
 UPDATE_EPOCHS: 4
@@ -17,27 +18,39 @@ ACTIVATION: tanh
 
 AGENT_INIT_SCALE: 2.
 AGENT_HYPERAWARE: True
-AGENT_HYPERNET_HIDDEN_DIM: 32 # width of hypernet
-AGENT_HYPERNET_INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
+AGENT_HYPERNET_KWARGS:
+  HIDDEN_DIM: 64 # width of hypernet
+  INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
+  USE_LAYER_NORM: True # whether LN is included before ReLU
+  NUM_LAYERS: 4 # layers in hypernet, not target net
 
-ENV_NAME: MPE_simple_transport # MPE_simple_spread_v3
 SEED: 1
 NUM_SEEDS: 5
-ENV_KWARGS: {
-  agent_rads: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2],
-  agent_accels: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-  agent_capacities: [[0.18982161, 0.81017839],
-                     [0.29007672, 0.70992328],
-                     [0.39633298, 0.60366702],
-                     [0.56738995, 0.43261005],
-                     [0.21590217, 0.78409783],
-                     [0.89497965, 0.10502035],
-                     [0.77398882, 0.22601118],
-                     [0.22818673, 0.77181327],
-                     [0.47184828, 0.52815172],
-                     [0.44097518, 0.55902482]]
-}
-ANNEAL_LR: True
+
+ENV_NAME: MPE_simple_transport
+ENV_KWARGS:
+  max_steps: 100 # 25
+
+  # reward shaping
+  lumber_pickup_reward: 2.5 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
+  concrete_pickup_reward: 2.5 # reward given to an agent for pickup of concrete if their capacity is > 0.
+  dropoff_reward: 10 # the amount of reward an agent gets for dropping off a resource
+  quota_penalty: -0.1
+
+  # capabilities implemented in MPE_simple_transport: [lumber_cap, concrete_cap]
+  capability_aware: True # T/F
+  num_capabilities: 2
+  num_agents: 4
+
+  # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
+  agent_rads: [0.1, 0.1, 0.1, 0.1]
+  agent_accels: [2, 2, 2, 2]
+  agent_capacities: [[1.0, 0.0], [0.0, 1.0], [0.75, 0.25], [0.25, 0.75], [0.5, 0.5]]
+
+  site_quota: [2., 2.]
+
+  # test_team:
+  #   agent_capacities: [[0.1, 0.9], [0.3, 0.7], [0.7, 0.3], [0.9, 0.1]]
 
 # WandB Params
 ENTITY: star-lab-gt
