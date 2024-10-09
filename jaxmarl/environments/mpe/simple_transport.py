@@ -26,7 +26,7 @@ class SimpleTransportMPE(SimpleMPE):
         self.capability_aware = capability_aware
         self.num_capabilities = num_capabilities
         self.dim_capabilities = num_agents * num_capabilities
-        self.test_team = kwargs.get("test_team", None)
+        self.test_team = kwargs.get("test_teams", None)
 
         # observation dimensions
         pos_dim = num_agents * 2
@@ -289,7 +289,7 @@ class SimpleTransportMPE(SimpleMPE):
         quota_new = state.site_quota + quota_step
 
         # # if quota is met, stop applying penalty, otherwise, apply penalty
-        quota_rew = jnp.mean(jnp.where(quota_new < 0, self.quota_penalty, 0), axis=0)
+        quota_rew = jnp.where(jnp.all(quota_new >= 0), -2*self.quota_penalty, self.quota_penalty)
         rew = {a: rew[a] + quota_rew for a in rew}
 
         return rew
@@ -299,7 +299,7 @@ class SimpleTransportMPE(SimpleMPE):
         Override reset in simple.py to fix the location of the depots and construction site.
         """
 
-        key_a, key_l = jax.random.split(key)
+        key_a, key_t, key_q = jax.random.split(key, 3)
 
         p_pos = jnp.concatenate(
             [
@@ -317,24 +317,27 @@ class SimpleTransportMPE(SimpleMPE):
             ]
         )
 
-        # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
-        selected_agents = jax.random.choice(key_a, self.agent_range, shape=(self.num_agents,), replace=False)
-        
-        agent_rads = self.agent_rads[selected_agents]
-        agent_accels = self.agent_accels[selected_agents]
-        agent_capacities = self.agent_capacities[selected_agents]
+        agent_rads = self.agent_rads
+        agent_accels = self.agent_accels
+
+        # randomly sample a team from the capacity team pool
+        selected_team = jax.random.randint(key_a, (1), minval=0, maxval=len(self.agent_capacities))
+        agent_capacities = self.agent_capacities[selected_team].squeeze()
 
         # if a test distribution is provided and this is a test_env, override capacities
         # NOTE: also add other capabilities here?
         if self.test_env_flag and self.test_team is not None:
-            agent_capacities = jnp.array(self.test_team["agent_capacities"])
+            selected_team = jax.random.randint(key_a, (1), minval=0, maxval=len(self.test_team["agent_capacities"]))
+            agent_capacities = jnp.array(self.test_team["agent_capacities"][selected_team]).squeeze()
 
         # initialize with empty payload or a payload corresponding to capacity
-        payload = jnp.where(
-            jax.random.uniform(key_l, (self.num_agents, 1)) < 0.5, 
-            0, 
-            jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
-        )
+        # payload = jnp.where(
+        #     jax.random.uniform(key_l, (self.num_agents, 1)) < 0.5, 
+        #     0, 
+        #     jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
+        # )
+
+        self.site_quota = -jax.random.uniform(key_q, (2), minval=0.5*self.num_agents, maxval=self.num_agents)
 
         state = State(
             p_pos=p_pos,
