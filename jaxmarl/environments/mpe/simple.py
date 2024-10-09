@@ -31,7 +31,7 @@ class State:
     accel: chex.Array = None # [n, 1] representing accel applied to actions
     rad: chex.Array = None # [n, 1] representing rad of each entity (first agents, then landmarks)
     payload: chex.Array = None # [n, 2] representing agent's current payload, used in: SimpleTransport
-    capacity: chex.Array = None # [n, 2] representing agent's carrying capacity, used in: SimpleTransport
+    capacity: chex.Array = None # [t, n, 2] representing t possible teams with n agent's carrying capacity, used in: SimpleTransport
     site_quota: chex.Array = None # [2] representing remaining materials needed to meet quota, used in: SimpleTransport
 
 class SimpleMPE(MultiAgentEnv):
