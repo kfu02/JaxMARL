@@ -338,6 +338,8 @@ class SimpleTransportMPE(SimpleMPE):
         # )
 
         self.site_quota = -jax.random.uniform(key_q, (2), minval=0.5*self.num_agents, maxval=self.num_agents)
+        if self.test_env_flag:
+            self.site_quota = -jax.random.uniform(key_q, (2), minval=0.25*self.num_agents, maxval=0.5*self.num_agents)
 
         state = State(
             p_pos=p_pos,
