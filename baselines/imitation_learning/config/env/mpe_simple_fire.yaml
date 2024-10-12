@@ -10,7 +10,7 @@ ENV_KWARGS:
   pos_shaping_factor: 0.01
 
   # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
-  capability_aware: False # T/F
+  capability_aware: True # T/F
   num_capabilities: 2
   num_agents: 3
   num_landmarks: 2
