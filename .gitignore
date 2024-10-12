@@ -21,3 +21,4 @@ models/
 **/*.gif
 multirun/
 baselines/QLearning/checkpoints/*
+baselines/MAPPO/checkpoints/*

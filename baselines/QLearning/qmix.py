@@ -439,7 +439,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env, env_name="MPE_
                 operand=None
             )
 
-            # update the greedy rewards
+            # update the greedy rewards/metrics/viz
             rng, _rng = jax.random.split(rng)
             test_results = jax.lax.cond(
                 time_state['updates'] % (config["TEST_INTERVAL"] // config["NUM_STEPS"] // config["NUM_ENVS"]) == 0,
@@ -613,8 +613,6 @@ def make_train(config, log_train_env, log_test_env, viz_test_env, env_name="MPE_
             if env_name == "MPE_simple_fire":
                 metrics = {
                     'test_returns': first_returns['__all__'],# episode returns
-                    # NOTE: only works for simple spread
-                    # 'test_pct_landmarks_covered': pct_landmarks_covered(step_state),
                     'test_fire_success_rate': fire_env_metrics[0],
                     'test_pct_fires_put_out': fire_env_metrics[1],
                     'test_snd': snd_value,
@@ -712,7 +710,7 @@ def main(config):
         entity=config["ENTITY"],
         project=config["PROJECT"],
         tags=wandb_tags,
-        name=f'{hyper_tag} {recurrent_tag} {aware_tag} / {env_name}',
+        name=f'{alg_name} / {hyper_tag} {recurrent_tag} {aware_tag} / {env_name}',
         config=config,
         mode=config["WANDB_MODE"],
     )

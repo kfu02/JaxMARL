@@ -1,8 +1,8 @@
 LR: 2e-3
 ANNEAL_LR: True
 NUM_ENVS: 16 
-NUM_STEPS: 128 
-TOTAL_TIMESTEPS: 10e6
+# NUM_STEPS: 128 # defined below by ENV_KWARGS.max_steps
+TOTAL_TIMESTEPS: 5e6
 FC_DIM_SIZE: 128
 GRU_HIDDEN_DIM: 128
 UPDATE_EPOCHS: 4
@@ -14,9 +14,9 @@ SCALE_CLIP_EPS: False
 ENT_COEF: 0.01
 VF_COEF: 0.5
 MAX_GRAD_NORM: 0.5
-ACTIVATION: tanh
 
 AGENT_INIT_SCALE: 2.
+AGENT_RECURRENT: True # NOTE: False option not implemented for MAPPO
 AGENT_HYPERAWARE: True
 AGENT_HYPERNET_KWARGS:
   HIDDEN_DIM: 64 # width of hypernet
@@ -24,12 +24,9 @@ AGENT_HYPERNET_KWARGS:
   USE_LAYER_NORM: True # whether LN is included before ReLU
   NUM_LAYERS: 4 # layers in hypernet, not target net
 
-SEED: 1
-NUM_SEEDS: 5
-
 ENV_NAME: MPE_simple_transport
 ENV_KWARGS:
-  max_steps: 100 # 25
+  max_steps: 50 # 25
 
   # reward shaping
   lumber_pickup_reward: 2.5 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
@@ -47,12 +44,20 @@ ENV_KWARGS:
   agent_accels: [2, 2, 2, 2]
   agent_capacities: [[1.0, 0.0], [0.0, 1.0], [0.75, 0.25], [0.25, 0.75], [0.5, 0.5]]
 
-  site_quota: [2., 2.]
+  site_quota: [1., 1.]
 
   # test_team:
   #   agent_capacities: [[0.1, 0.9], [0.3, 0.7], [0.7, 0.3], [0.9, 0.1]]
+
+SEED: 76
+NUM_SEEDS: 10
 
 # WandB Params
 ENTITY: star-lab-gt
 PROJECT: JaxMARL
 WANDB_MODE: online
+
+SAVE_PATH: baselines/MAPPO/checkpoints
+VISUALIZE_FINAL_POLICY: True
+# number of seeds/envs to visualize
+VIZ_NUM_ENVS: 3
