@@ -337,9 +337,9 @@ class SimpleTransportMPE(SimpleMPE):
         #     jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
         # )
 
-        self.site_quota = -jax.random.uniform(key_q, (2), minval=0.5*self.num_agents, maxval=self.num_agents)
-        if self.test_env_flag:
-            self.site_quota = -jax.random.uniform(key_q, (2), minval=0.25*self.num_agents, maxval=0.5*self.num_agents)
+        self.site_quota = -jax.random.uniform(key_q, (2), minval=0.25*self.num_agents, maxval=0.5*self.num_agents)
+        # if self.test_env_flag:
+        #     self.site_quota = -jax.random.uniform(key_q, (2), minval=0.5*self.num_agents, maxval=0.75*self.num_agents)
 
         state = State(
             p_pos=p_pos,
