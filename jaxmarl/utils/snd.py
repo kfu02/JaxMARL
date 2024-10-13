@@ -19,6 +19,24 @@ def homogeneous_pass_qmix(params, hidden_state, obs, dones, agent=None):
 
     return q_vals
 
+def homogeneous_pass_mappo(params, hidden_state, obs, dones, agent=None):
+    """
+    Copied and slightly modified from qmix.py
+    """
+    original_shape = obs.shape
+    # concatenate agents and parallel envs to process them in one batch
+    batched_input = (
+        obs.reshape(1, obs.shape[0]*obs.shape[1], obs.shape[2]), # [1, n_envs*n_agents, obs_dim] for broadcasting with scanned
+        dones.reshape(1, dones.shape[0]*dones.shape[1]) # [1, n_envs*n_agents] for broadcasting with scanned
+    )
+
+    hidden_state = hidden_state.reshape(hidden_state.shape[0]*hidden_state.shape[1], hidden_state.shape[2])
+    hidden_state, pi = agent.apply(params, hidden_state, batched_input)
+ 
+    pi = pi.probs  # (time_steps, n_envs, n_agents, action_dim)
+
+    return pi
+
 def total_variational_distance(p, q):
     """
     Get the distance between two categorical distributions
@@ -40,6 +58,9 @@ def snd(rollouts, hiddens, dim_c, params, policy='qmix', agent=None):
 
         hiddens = hiddens.reshape(original_shape[0], original_shape[1], original_shape[2], -1) # [n_agents, timesteps, batch_dim, hidden_dim]
         hiddens = jnp.transpose(hiddens, (1, 2, 0, 3)) # [n_agents, batch_dim, n_agents, hidden_dim]
+    
+    if policy == 'mappo':
+        policy = homogeneous_pass_mappo
     
     timesteps, batch_size, n_agents, obs_dim = rollouts.shape
 
@@ -87,16 +108,22 @@ def snd(rollouts, hiddens, dim_c, params, policy='qmix', agent=None):
         corresponding observations, add to flatten into a vector containing the added distances
         between i and each other agent 
         """
-        qvals_i = get_policy_outputs(agent_i) # [timesteps, batch_size, n_agents, action_dim]
+        if policy == 'qmix':
+            qvals_i = get_policy_outputs(agent_i) # [timesteps, batch_size, n_agents, action_dim]
 
-        # convert qvals to categorical distributions
-        qval_maxs = jnp.max(qvals_i, axis=-1, keepdims=True)
-        qvals_i = qvals_i - qval_maxs
-        categorical_i = jnp.exp(qvals_i) / jnp.sum(jnp.exp(qvals_i), axis=-1, keepdims=True)
+            # convert qvals to categorical distributions
+            qval_maxs = jnp.max(qvals_i, axis=-1, keepdims=True)
+            qvals_i = qvals_i - qval_maxs
+            categorical_i = jnp.exp(qvals_i) / jnp.sum(jnp.exp(qvals_i), axis=-1, keepdims=True)
+        elif policy == 'mappo':
+            categorical_i = get_policy_outputs(agent_i)
+        else:
+            categorical_i = get_policy_outputs(agent_i)
 
         # get pairwise distance between agent i and all other agents
         def tvd_for_agent_j(j):
             return total_variational_distance(categorical_i[:, :, agent_i, :], categorical_i[:, :, j, :])
+        
         tvd_all_agents = jax.vmap(tvd_for_agent_j)(jnp.arange(n_agents))  # [n_agents, timesteps, batch_size]
 
         return tvd_all_agents  # [n_agents, batch_size, timesteps]
