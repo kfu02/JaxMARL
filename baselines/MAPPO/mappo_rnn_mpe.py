@@ -245,6 +245,10 @@ def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
     x = x.reshape((num_actors, num_envs, -1))
     return {a: x[i] for i, a in enumerate(agent_list)}
 
+def unbatchify_snd(x: jnp.ndarray, agent_list, num_envs, num_actors):
+    x = x.reshape((x.shape[0], num_actors, num_envs, -1))
+    return {a: x[i] for i, a in enumerate(agent_list)}
+
 
 def make_train(config, viz_test_env):
     env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
@@ -705,8 +709,9 @@ def make_train(config, viz_test_env):
 
             # get snd, NOTE: dim_c multiplier is currently hardcoded since it works for both fire and transport 
             # TODO: define SND for MAPPO
-            snd_value = 0
-            # snd_value = snd(rollouts=obs, hiddens=hstate, dim_c=len(test_env.training_agents)*2, params=params, policy='mappo', agent=agent)
+            snd_obs = obs.reshape(config['ENV_KWARGS']['max_steps'], len(env.agents), config["NUM_ENVS"], -1)
+            snd_hstate = hstate.reshape(config['ENV_KWARGS']['max_steps'], len(env.agents), config["NUM_ENVS"], -1)
+            snd_value = snd(rollouts=snd_obs, hiddens=snd_hstate, dim_c=test_env.num_agents*2, params=actor_params, policy='mappo', agent=actor_network)
 
             # define fire_env_metrics (should be attached to env, but is not)
             def fire_env_metrics(final_env_state):
