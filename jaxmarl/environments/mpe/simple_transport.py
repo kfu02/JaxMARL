@@ -26,7 +26,7 @@ class SimpleTransportMPE(SimpleMPE):
         self.capability_aware = capability_aware
         self.num_capabilities = num_capabilities
         self.dim_capabilities = num_agents * num_capabilities
-        self.test_team = kwargs.get("test_team", None)
+        self.test_team = kwargs.get("test_teams", None)
 
         # observation dimensions
         pos_dim = num_agents * 2
@@ -289,7 +289,7 @@ class SimpleTransportMPE(SimpleMPE):
         quota_new = state.site_quota + quota_step
 
         # # if quota is met, stop applying penalty, otherwise, apply penalty
-        quota_rew = jnp.mean(jnp.where(quota_new < 0, self.quota_penalty, 0), axis=0)
+        quota_rew = jnp.where(jnp.all(quota_new >= 0), -2*self.quota_penalty, self.quota_penalty)
         rew = {a: rew[a] + quota_rew for a in rew}
 
         return rew
@@ -299,13 +299,10 @@ class SimpleTransportMPE(SimpleMPE):
         Override reset in simple.py to fix the location of the depots and construction site.
         """
 
-        key_a, key_l = jax.random.split(key)
+        key_a, key_t, key_q = jax.random.split(key, 3)
 
         p_pos = jnp.concatenate(
             [
-                # jax.random.uniform(
-                #     key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
-                # ),
                 jnp.zeros((self.num_agents, 2)),
                 jnp.array(
                     [
@@ -317,24 +314,29 @@ class SimpleTransportMPE(SimpleMPE):
             ]
         )
 
-        # randomly sample N_agents' capabilities from the possible agent pool (hence w/out replacement)
-        selected_agents = jax.random.choice(key_a, self.agent_range, shape=(self.num_agents,), replace=False)
-        
-        agent_rads = self.agent_rads[selected_agents]
-        agent_accels = self.agent_accels[selected_agents]
-        agent_capacities = self.agent_capacities[selected_agents]
+        agent_rads = self.agent_rads
+        agent_accels = self.agent_accels
+
+        # randomly sample a team from the capacity team pool
+        selected_team = jax.random.choice(key_a, self.agent_capacities.shape[0], shape=(1,))
+        agent_capacities = self.agent_capacities[selected_team].squeeze()
 
         # if a test distribution is provided and this is a test_env, override capacities
         # NOTE: also add other capabilities here?
         if self.test_env_flag and self.test_team is not None:
-            agent_capacities = jnp.array(self.test_team["agent_capacities"])
+            selected_team = jax.random.choice(key_t, self.test_team["agent_capacities"].shape[0], shape=(1,))
+            agent_capacities = jnp.array(self.test_team["agent_capacities"][selected_team]).squeeze()
 
         # initialize with empty payload or a payload corresponding to capacity
-        payload = jnp.where(
-            jax.random.uniform(key_l, (self.num_agents, 1)) < 0.5, 
-            0, 
-            jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
-        )
+        # payload = jnp.where(
+        #     jax.random.uniform(key_l, (self.num_agents, 1)) < 0.5, 
+        #     0, 
+        #     jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
+        # )
+
+        self.site_quota = -jax.random.uniform(key_q, (2,), minval=0.125*self.num_agents, maxval=0.25*self.num_agents)
+        # if self.test_env_flag:
+        #     self.site_quota = -jax.random.uniform(key_q, (2), minval=0.5*self.num_agents, maxval=0.75*self.num_agents)
 
         state = State(
             p_pos=p_pos,
@@ -354,7 +356,7 @@ class SimpleTransportMPE(SimpleMPE):
 
         return self.get_obs(state), state
 
-def main():
+def unit_test():
     key = jax.random.PRNGKey(0)
 
     # Initialize environment with default settings
@@ -436,6 +438,82 @@ def main():
     assert (state.site_quota == expected_quota).all(), f"FAIL: expected quota to be {expected_quota}, got {state.site_quota}"
     print("PASS: rewards and payload update correctly when agent 0 has payload and enters the site")
 
+def generate_teams(seed):
+    # # Dictionary to track team occurrences
+    # team_occurrences = {}
+
+    # # Check for duplicates
+    # for i, team in enumerate(teams):
+    #     # Convert the team to a sorted tuple
+    #     sorted_team = tuple(sorted(tuple(agent) for agent in team))
+        
+    #     # Track occurrences of each team
+    #     if sorted_team in team_occurrences:
+    #         team_occurrences[sorted_team].append(team)
+    #         print(i)
+    #         print(team)
+    #     else:
+    #         team_occurrences[sorted_team] = [team]
+
+    # # Print duplicates
+    # print("Duplicate teams:")
+    # for team, occurrences in team_occurrences.items():
+    #     if len(occurrences) > 1:
+    #         print(f"Team {occurrences[0]} is duplicated {len(occurrences)} times.")
+
+
+    import numpy as np
+    np.random.seed(seed)
+
+    agent_values = np.array([
+        [0.0, 0.5], [0.1, 0.4], [0.2, 0.3], [0.3, 0.2], [0.4, 0.1], [0.5, 0.0]
+    ])
+
+    # Number of teams and team size
+    num_teams = 10
+    team_size = 4
+
+    # To store unique teams
+    teams = set()
+
+    # Helper function to create a sorted tuple of the team to ensure uniqueness
+    def create_team():
+        team_indices = np.random.choice(agent_values.shape[0], team_size, replace=False)
+        team = agent_values[team_indices].tolist()
+        team = tuple(sorted(tuple(agent) for agent in team))
+        return team
+
+    # Generate 10 unique teams
+    while len(teams) < num_teams:
+        team_tuple = create_team()
+        teams.add(team_tuple)
+
+    # Convert back to array for easier handling
+    teams = np.array([list([list(agent) for agent in team]) for team in teams])
+
+    # Print the teams
+    print("Train Teams:")
+    for i, team in enumerate(teams):
+        team = [list(agent) for agent in team]
+        print(f" - {team}")
+
+    # for test teams, sample cap_0 from range (0-1), set cap_1 to be (1-cap_0)
+    N_test_teams = 10
+    cap_0 = np.random.uniform(0, 1, N_test_teams*team_size).reshape(N_test_teams, team_size)
+    cap_1 = 1-cap_0
+
+    # tie caps together by agent, rearrange to shape [N_teams, N_agents, N_cap]
+    test_teams = np.round(np.stack([cap_0, cap_1]).transpose(1, 2, 0), decimals=2)
+
+    print("Test Teams:")
+    for i in range(N_test_teams):
+        test_team = test_teams[i, ...].squeeze()
+        print("-", test_team.flatten())
+    print()
+
 
 if __name__ == "__main__":
-    main()
+    # unit_test()
+
+    SEED = 76
+    generate_teams(SEED)
