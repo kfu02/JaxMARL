@@ -23,7 +23,7 @@ AGENT_HYPERNET_INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
 ENV_NAME: MPE_simple_transport # MPE_simple_spread_v3
 SEED: 1
 NUM_SEEDS: 5
-ENV_KWARGS: {
+ENV_KWARGS:
   agent_rads: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2],
   agent_accels: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
   agent_capacities: [[0.18982161, 0.81017839],
@@ -36,7 +36,7 @@ ENV_KWARGS: {
                      [0.22818673, 0.77181327],
                      [0.47184828, 0.52815172],
                      [0.44097518, 0.55902482]]
-}
+
 ANNEAL_LR: True
 
 # WandB Params
