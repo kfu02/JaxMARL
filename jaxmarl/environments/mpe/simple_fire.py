@@ -38,7 +38,7 @@ class SimpleFireMPE(SimpleMPE):
         self.colour = [(115, 243, 115)] * num_agents + [(255, 64, 64)] * num_landmarks
 
         # env specific parameters
-        self.test_team = kwargs["test_team"] if "test_team" in kwargs else None
+        self.test_teams = jnp.array(kwargs["test_teams"]) if "test_teams" in kwargs else None
         self.fire_rad_range = kwargs["fire_rad_range"] if "fire_rad_range" in kwargs else [0.2, 0.3]
         
         # reward shaping
@@ -219,7 +219,7 @@ class SimpleFireMPE(SimpleMPE):
             return (key_l, new_fires, fire_index), None
 
         # use jax.lax.scan to spawn N more fires, each of which does not collide with any prev
-        key_l, key_fs = jax.random.split(key_l)
+        key_l, key_fs, key_tt = jax.random.split(key_l, 3)
         # set the init spawns to be far from the actual spawns, s.t. array shape can be maintained in the carry
         init_fires = jax.random.uniform(
             key_fs, (self.num_landmarks, 2), minval=-100.0, maxval=-100.0
@@ -227,25 +227,6 @@ class SimpleFireMPE(SimpleMPE):
         initial_state = (key_l, init_fires, 0)
         MAX_ITERS = 10*self.num_landmarks # try ~10 times for each fire, each time
         (key_l, landmark_p_pos, _), _ = jax.lax.scan(_spawn_one_fire, initial_state, None, length=MAX_ITERS)
-
-        """
-        # randomly decide to spawn between 1 and NUM_LANDMARKS fires (NUM_LANDMARKS = MAX_FIRES)
-        # then mask out landmark_rads/landmark_p_pos as needed
-        key_l, key_num_fires = jax.random.split(key_l)
-        num_fires = jax.random.randint(key_num_fires, (), 1, self.num_landmarks+1)
-
-        # this mask dictates which fires to be masked out
-        # and works by index-wise comparing indices array with RNG num_fires from above
-        # e.g. indices=[0, 1, 2], num_fires=2 -> mask=[T, T, F]
-        # num_to_mask = (self.num_landmarks - num_fires)
-        num_to_mask = 0
-        mask = jnp.arange(self.num_landmarks) < num_to_mask
-        landmark_rads = jnp.where(mask, -10, landmark_rads)
-
-        # expand mask to correctly match p_pos shape
-        mask = jnp.stack([mask, mask], axis=1)
-        landmark_p_pos = jnp.where(mask, -10, landmark_p_pos)
-        """
 
         p_pos = jnp.concatenate(
             [
@@ -265,9 +246,12 @@ class SimpleFireMPE(SimpleMPE):
         agent_accels = self.agent_accels[selected_agents]
 
         # unless a test distribution is provided and this is a test_env
-        if self.test_env_flag and self.test_team is not None:
-            agent_rads = jnp.array(self.test_team["agent_rads"])
-            agent_accels = jnp.array(self.test_team["agent_accels"])
+        if self.test_env_flag and self.test_teams is not None:
+            # pick one of the test teams at random
+            selected_team = jax.random.choice(key_tt, self.test_teams.shape[0], shape=(1,))
+            test_team = self.test_teams[selected_team].squeeze()
+            agent_rads = test_team[0::2]
+            agent_accels = test_team[1::2]
 
         state = State(
             p_pos=p_pos,
@@ -283,3 +267,41 @@ class SimpleFireMPE(SimpleMPE):
         )
 
         return self.get_obs(state), state
+
+def generate_teams(seed):
+    import numpy as np
+    np.random.seed(seed)
+    small_fire_rad = np.random.uniform(0.1, 0.2, 2)
+    big_fire_rad = np.random.uniform(0.3, 0.4, 1)
+    accel = np.random.uniform(1, 3, 3)
+    print("Train Agents:")
+    print("rad:\n", np.round(np.concatenate((small_fire_rad, big_fire_rad, small_fire_rad, big_fire_rad)), decimals=2))
+    print("accel:\n", np.round(np.concatenate((accel, accel)), decimals=2))
+    print()
+
+    N_test_teams = 10
+    smaller_fire_rad = np.random.uniform(0.05, 0.094, N_test_teams)
+    med_fire_rad = 0.25 - smaller_fire_rad
+    bigger_fire_rad = np.random.uniform(0.4, 0.5, N_test_teams)
+
+    small_accel = np.random.uniform(3, 3.5, N_test_teams)
+    med_accel = np.random.uniform(1, 3, N_test_teams)
+    big_accel = np.random.uniform(0.5, 1, N_test_teams)
+
+    # tie caps together by agent
+    small_agents = np.stack((smaller_fire_rad, small_accel)).T
+    med_agents = np.stack((med_fire_rad, med_accel)).T
+    big_agents = np.stack((bigger_fire_rad, big_accel)).T
+
+    # then group teams, transpose to be N_teams first
+    test_teams = np.round(np.stack((small_agents, med_agents, big_agents)).transpose((1, 0, 2)), decimals=2)
+
+    print("Test Teams:")
+    for i in range(N_test_teams):
+        test_team = test_teams[i, ...].squeeze()
+        print(test_team.flatten())
+    print()
+
+if __name__ == "__main__":
+    SEED = 76
+    generate_teams(SEED)
