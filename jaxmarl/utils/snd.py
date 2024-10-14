@@ -44,12 +44,12 @@ def total_variational_distance(p, q):
 
     return 0.5 * jnp.sum(jnp.abs(p - q), axis=-1)
 
-def snd(rollouts, hiddens, dim_c, params, policy='qmix', agent=None):
+def snd(rollouts, hiddens, dim_c, params, alg='qmix', agent=None):
     """
     Calculate system neural diversity metric
     """
 
-    if policy == 'qmix':
+    if alg == 'qmix':
         policy = homogeneous_pass_qmix
         agents, agents_obs = zip(*rollouts.items())
         rollouts = jnp.stack(agents_obs[1:]) # [n_agents, timesteps, batch_dim, obs_dim]
@@ -59,7 +59,7 @@ def snd(rollouts, hiddens, dim_c, params, policy='qmix', agent=None):
         hiddens = hiddens.reshape(original_shape[0], original_shape[1], original_shape[2], -1) # [n_agents, timesteps, batch_dim, hidden_dim]
         hiddens = jnp.transpose(hiddens, (1, 2, 0, 3)) # [n_agents, batch_dim, n_agents, hidden_dim]
     
-    if policy == 'mappo':
+    if alg == 'mappo':
         policy = homogeneous_pass_mappo
     
     timesteps, batch_size, n_agents, obs_dim = rollouts.shape
@@ -108,14 +108,14 @@ def snd(rollouts, hiddens, dim_c, params, policy='qmix', agent=None):
         corresponding observations, add to flatten into a vector containing the added distances
         between i and each other agent 
         """
-        if policy == 'qmix':
+        if alg == 'qmix':
             qvals_i = get_policy_outputs(agent_i) # [timesteps, batch_size, n_agents, action_dim]
 
             # convert qvals to categorical distributions
             qval_maxs = jnp.max(qvals_i, axis=-1, keepdims=True)
             qvals_i = qvals_i - qval_maxs
             categorical_i = jnp.exp(qvals_i) / jnp.sum(jnp.exp(qvals_i), axis=-1, keepdims=True)
-        elif policy == 'mappo':
+        elif alg == 'mappo':
             categorical_i = get_policy_outputs(agent_i)
         else:
             categorical_i = get_policy_outputs(agent_i)
