@@ -545,7 +545,7 @@ def make_train(config, log_train_env, log_test_env, viz_test_env, env_name="MPE_
             )
 
             # get snd, NOTE: dim_c multiplier is currently hardcoded since it works for both fire and transport 
-            snd_value = snd(rollouts=obs, hiddens=hstate, dim_c=len(test_env.training_agents)*2, params=params, policy='qmix', agent=agent)
+            snd_value = snd(rollouts=obs, hiddens=hstate, dim_c=len(test_env.training_agents)*2, params=params, alg='qmix', agent=agent)
 
             def fire_env_metrics(final_env_state):
                 """

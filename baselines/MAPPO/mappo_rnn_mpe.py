@@ -711,7 +711,7 @@ def make_train(config, viz_test_env):
             # TODO: define SND for MAPPO
             snd_obs = obs.reshape(config['ENV_KWARGS']['max_steps'], len(env.agents), config["NUM_ENVS"], -1)
             snd_hstate = hstate.reshape(config['ENV_KWARGS']['max_steps'], len(env.agents), config["NUM_ENVS"], -1)
-            snd_value = snd(rollouts=snd_obs, hiddens=snd_hstate, dim_c=test_env.num_agents*2, params=actor_params, policy='mappo', agent=actor_network)
+            snd_value = snd(rollouts=snd_obs, hiddens=snd_hstate, dim_c=test_env.num_agents*2, params=actor_params, alg='mappo', agent=actor_network)
 
             # define fire_env_metrics (should be attached to env, but is not)
             def fire_env_metrics(final_env_state):
