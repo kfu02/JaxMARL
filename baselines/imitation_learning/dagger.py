@@ -946,7 +946,7 @@ def main(config):
         entity=config["ENTITY"],
         project=config["PROJECT"],
         tags=wandb_tags,
-        name=f'DAgger / {hyper_tag} {recurrent_tag} {aware_tag} / {env_name}',
+        name=f'{alg_name} / {hyper_tag} {recurrent_tag} {aware_tag} / {env_name}',
         config=config,
         mode=config["WANDB_MODE"],
     )
