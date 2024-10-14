@@ -303,9 +303,6 @@ class SimpleTransportMPE(SimpleMPE):
 
         p_pos = jnp.concatenate(
             [
-                # jax.random.uniform(
-                #     key_a, (self.num_agents, 2), minval=-1.0, maxval=+1.0
-                # ),
                 jnp.zeros((self.num_agents, 2)),
                 jnp.array(
                     [
@@ -321,13 +318,13 @@ class SimpleTransportMPE(SimpleMPE):
         agent_accels = self.agent_accels
 
         # randomly sample a team from the capacity team pool
-        selected_team = jax.random.randint(key_a, (1), minval=0, maxval=len(self.agent_capacities))
+        selected_team = jax.random.choice(key_a, self.agent_capacities.shape[0], shape=(1,))
         agent_capacities = self.agent_capacities[selected_team].squeeze()
 
         # if a test distribution is provided and this is a test_env, override capacities
         # NOTE: also add other capabilities here?
         if self.test_env_flag and self.test_team is not None:
-            selected_team = jax.random.randint(key_a, (1), minval=0, maxval=len(self.test_team["agent_capacities"]))
+            selected_team = jax.random.choice(key_t, self.test_team["agent_capacities"].shape[0], shape=(1,))
             agent_capacities = jnp.array(self.test_team["agent_capacities"][selected_team]).squeeze()
 
         # initialize with empty payload or a payload corresponding to capacity
@@ -337,7 +334,7 @@ class SimpleTransportMPE(SimpleMPE):
         #     jnp.take_along_axis(agent_capacities, jax.random.randint(key_l, (self.num_agents, 1), minval=0, maxval=2), axis=1)
         # )
 
-        self.site_quota = -jax.random.uniform(key_q, (2), minval=0.25*self.num_agents, maxval=0.5*self.num_agents)
+        self.site_quota = -jax.random.uniform(key_q, (2,), minval=0.125*self.num_agents, maxval=0.25*self.num_agents)
         # if self.test_env_flag:
         #     self.site_quota = -jax.random.uniform(key_q, (2), minval=0.5*self.num_agents, maxval=0.75*self.num_agents)
 
@@ -498,7 +495,7 @@ def generate_teams(seed):
     print("Train Teams:")
     for i, team in enumerate(teams):
         team = [list(agent) for agent in team]
-        print(f"{team}")
+        print(f" - {team}")
 
     # for test teams, sample cap_0 from range (0-1), set cap_1 to be (1-cap_0)
     N_test_teams = 10
@@ -511,7 +508,7 @@ def generate_teams(seed):
     print("Test Teams:")
     for i in range(N_test_teams):
         test_team = test_teams[i, ...].squeeze()
-        print(test_team.flatten())
+        print("-", test_team.flatten())
     print()
 
 
