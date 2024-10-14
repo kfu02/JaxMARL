@@ -24,12 +24,12 @@ NUM_TEST_EPISODES: 32
 
 # agent network params
 PARAMETERS_SHARING: True
-AGENT_HIDDEN_DIM: 1024 # width of the RNN hidden dim + surrounding MLP layers
+AGENT_HIDDEN_DIM: 4096 # width of the RNN hidden dim + surrounding MLP layers
 AGENT_RECURRENT: True
 AGENT_INIT_SCALE: 2.
 AGENT_HYPERAWARE: True
 AGENT_HYPERNET_KWARGS:
-  HIDDEN_DIM: 512 # width of hypernet
+  HIDDEN_DIM: 1024 # width of hypernet
   INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
   USE_LAYER_NORM: True # whether LN is included before ReLU
   NUM_LAYERS: 4 # layers in hypernet, not target net

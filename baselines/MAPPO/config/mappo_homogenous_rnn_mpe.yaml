@@ -19,35 +19,44 @@ AGENT_INIT_SCALE: 2.
 AGENT_RECURRENT: True # NOTE: False option not implemented for MAPPO
 AGENT_HYPERAWARE: True
 AGENT_HYPERNET_KWARGS:
-  HIDDEN_DIM: 64 # width of hypernet
+  HIDDEN_DIM: 32 # width of hypernet
   INIT_SCALE: 0.2 # NOTE: MUST TUNE THIS
   USE_LAYER_NORM: True # whether LN is included before ReLU
   NUM_LAYERS: 4 # layers in hypernet, not target net
 
-ENV_NAME: MPE_simple_transport
+ENV_NAME: MPE_simple_fire
 ENV_KWARGS:
   max_steps: 50 # 25
 
-  # reward shaping
-  lumber_pickup_reward: 2.5 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
-  concrete_pickup_reward: 2.5 # reward given to an agent for pickup of concrete if their capacity is > 0.
-  dropoff_reward: 10 # the amount of reward an agent gets for dropping off a resource
-  quota_penalty: -0.1
+  fire_rad_range: [0.2, 0.3]
 
-  # capabilities implemented in MPE_simple_transport: [lumber_cap, concrete_cap]
+  # reward shaping
+  fire_out_reward: 0.5
+  uncovered_penalty_factor: 1
+  pos_shaping_factor: 0.01
+
+  # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
   capability_aware: True # T/F
   num_capabilities: 2
-  num_agents: 4
+  num_agents: 3
+  num_landmarks: 2
 
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
-  agent_rads: [0.1, 0.1, 0.1, 0.1]
-  agent_accels: [2, 2, 2, 2]
-  agent_capacities: [[1.0, 0.0], [0.0, 1.0], [0.75, 0.25], [0.25, 0.75], [0.5, 0.5]]
+  # NOTE: hijacking agent_rads = firefighting capability
+  agent_rads: [0.3, 0.2, 0.1, 0.1, 0.2]
+  agent_accels: [1, 2, 3, 3, 2]
 
-  site_quota: [1., 1.]
-
-  # test_team:
-  #   agent_capacities: [[0.1, 0.9], [0.3, 0.7], [0.7, 0.3], [0.9, 0.1]]
+  test_teams: 
+    [[0.09, 3.43, 0.16, 2.94, 0.42, 0.75],
+    [0.09, 3.41, 0.16, 3.,   0.48, 0.63],
+    [0.05, 3.46, 0.20, 2.76, 0.44, 0.6 ],
+    [0.08, 3.23, 0.17, 2.8,  0.5,  0.61],
+    [0.09, 3.14, 0.16, 1.16, 0.47, 0.86],
+    [0.06, 3.45, 0.19, 2.08, 0.46, 0.76],
+    [0.08, 3.06, 0.17, 1.08, 0.48, 0.56],
+    [0.07, 3.04, 0.18, 2.37, 0.45, 0.56],
+    [0.09, 3.36, 0.16, 2.2,  0.49, 0.64],
+    [0.09, 3.26, 0.16, 2.59, 0.47, 0.64]]
 
 SEED: 76
 NUM_SEEDS: 10
