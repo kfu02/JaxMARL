@@ -774,7 +774,7 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
                 hiddens=policy_traj_batch.hstate,
                 dim_c=len(test_env.training_agents)*2,
                 params=policy_step_state[0],
-                policy='qmix',
+                alg='qmix',
                 agent=agent
             )
             
