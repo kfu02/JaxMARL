@@ -34,6 +34,7 @@ def homogeneous_pass_mappo(params, hidden_state, obs, dones, agent=None):
     hidden_state, pi = agent.apply(params, hidden_state, batched_input)
  
     pi = pi.probs  # (time_steps, n_envs, n_agents, action_dim)
+    pi = pi.reshape(*original_shape[:-1], -1)
 
     return pi
 
