@@ -127,42 +127,36 @@ def expert_heuristic_material_transport(obs_dict, cached_values):
     
     return actions
 
-def expert_heuristic_simple_fire(obs_dict, cached_values):
+def expert_heuristic_simple_fire(env_state, agent_list, cached_values):
     """
     Expert policy to gather samples from for firefighting env.
-    pi(obs) -> action for each agent/obs
 
-    Input: obs_dict = {agent_i : [timesteps, num_envs, obs_dim]}
+    Input: env_state = full knowledge of state at time t
     Output: actions = {agent_i : [timesteps, num_envs]} (rather than outputting act_dim, directly output index of best action)
 
-    cached_values are only there to help speed up computation.
+    cached_values are there to speed up computation.
     """
     valid_set_partitions, num_landmarks = cached_values["valid_set_partitions"], cached_values["num_landmarks"]
-    num_agents = len(obs_dict)
+    num_agents = len(agent_list)
 
-    def solve_one_env(obs):
+    def solve_one_env(p_pos, rad):
         """
-        For all agents in one env, at this timestep, obs will take the form [n_agents, obs_dim]. Provide the best action for each agent.
+        p_pos : pos of agents & fires at time t
+        rad : rad of agents & fires at time t
 
-        Note task allocation only takes info from the first agent, as everything is fully observable from that POV.
+        return the best action for all agents
         """
+        # NOTE: this is hardcoded to match get_obs() in simple_fire.py
+        # first n_agents elements of p_pos are agents, rest are landmarks
+        agent_pos = p_pos[:num_agents]
+        fire_pos = p_pos[num_agents:]
+        agent_rad = rad[:num_agents]
+        fire_rad = rad[num_agents:]
 
-        # NOTE: this is derived from return type of get_obs() in simple_fire.py (vel is missing as it is irrelevant here)
-        n_cap = 2
-        # unflatten to be indexable by agent
-        agent_pos = jnp.reshape(obs[0, :(num_agents*2)], (-1, 2))
-        ego_pos = jnp.reshape(agent_pos[0], (1,2))
-        rel_other_pos = agent_pos[1:]
-
-        # unflatten to be indexable by fire
-        rel_landmark_pos = jnp.reshape(obs[0, -(num_landmarks*2+num_landmarks+num_agents*n_cap):-(num_landmarks+num_agents*n_cap)], (-1, 2))
-        landmark_rad = obs[0, -(num_landmarks+num_agents*n_cap): -num_agents*n_cap]
-        cap = obs[0, -num_agents*n_cap:]
-
-        # concat a 0 to the end of the agent_rad
+        # concat a single 0 to the end of agent_rad
         # this is necessary to handle the padded -1s in valid_set_partitions, and should not mess up the true non-padded indices
         # (e.g. agent_rad = [1, 2, 3, 0], allocation [0,1], [2,-1] -> [1+2, 3+0], allocation [1,-1], [0,2] -> [2+0, 1+3]
-        agent_rad = jnp.concatenate([cap[1::2], jnp.zeros(shape=(1,))])
+        agent_rad = jnp.concatenate([agent_rad, jnp.zeros(shape=(1,))])
 
         # for each possible allocation of agents to fires
         # (set partitions is a list of lists, e.g. [[0,1],[2]], which we can interpret as 0,1 => fire 0, 2 => fire 1)
@@ -171,7 +165,7 @@ def expert_heuristic_simple_fire(obs_dict, cached_values):
             # compute the reward if we allocated according to this split
             reward = 0
             for i in range(num_landmarks):
-                fire_ff = landmark_rad[i]
+                fire_ff = fire_rad[i]
                 team_ff = jnp.sum(agent_rad[allocation[i]]) 
                 # cap positive reward per fire at 0
                 reward += jnp.where(team_ff >= fire_ff, 0, team_ff - fire_ff)
@@ -183,17 +177,12 @@ def expert_heuristic_simple_fire(obs_dict, cached_values):
         best_index = jnp.argmax(all_rew).astype(int)
         best_allocation = valid_set_partitions[best_index]
 
-        # convert agent/fire pos to global coords
-        global_agent_pos = jnp.concatenate([ego_pos, ego_pos+rel_other_pos]) #[num_agents, 2]
-        global_fire_pos = ego_pos+rel_landmark_pos
-
-        # jax.debug.print("obs {} global_fire_pos {}", obs, global_fire_pos)
-
+        # then compute best actions for each agent based on best allocation
         def best_action_for_agent(agent_i):
             my_fire = jnp.argwhere(best_allocation == agent_i, size=1)[0][0]
             
             unit_vectors = jnp.array([[0,0], [-1,0], [+1,0], [0,-1], [0,+1]])
-            dir_to_fire_pos = global_fire_pos[my_fire] - global_agent_pos[agent_i]
+            dir_to_fire_pos = fire_pos[my_fire] - agent_pos[agent_i]
             dir_to_fire_pos = dir_to_fire_pos / jnp.linalg.norm(dir_to_fire_pos)
             dot = jnp.dot(unit_vectors, dir_to_fire_pos)
 
@@ -202,25 +191,15 @@ def expert_heuristic_simple_fire(obs_dict, cached_values):
             best_action = jnp.argmax(dot)
             return best_action 
 
-        # then compute best actions for each agent based on assignment
         all_best_actions = jax.vmap(best_action_for_agent)(jnp.arange(num_agents))
         return all_best_actions
 
-    # stack all agent obs together
-    obs_by_ts = jnp.stack(list(obs_dict.values())) # [n_agents, TS, n_envs, obs_dim]
-    n_agents, timesteps, n_envs, obs_dim = obs_by_ts.shape
-    obs_by_ts = jnp.reshape(obs_by_ts, (n_agents, timesteps * n_envs, obs_dim)) # [n_agents, TS*n_envs, obs_dim]
-
-    # iterate over timesteps
-    all_acts = jax.vmap(solve_one_env, in_axes=[1])(obs_by_ts) # [TS*n_envs, n_agents] (act_dim=1, squeezed out)
-    # then reshape to be [n_agents, TS, n_envs] (act_dim = 1)
-    all_acts = jnp.swapaxes(all_acts, 0, 1)
-    all_acts = jnp.reshape(all_acts, (n_agents, timesteps, n_envs))
-
-    # then separate back into per-agent actions, matching original obs
+    # find best actions across all envs, then separate into best for each agent/env
+    all_acts = jax.vmap(solve_one_env, in_axes=[0, 0])(env_state.p_pos, env_state.rad)
+    # all_acts: [n_envs, n_agents]
     actions = {}
-    for i, agent_name in enumerate(obs_dict.keys()):
-        actions[agent_name] = all_acts[i, ...]
+    for i, agent_name in enumerate(agent_list):
+        actions[agent_name] = all_acts[..., i]
 
     return actions
 
@@ -346,8 +325,7 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
                 obs_   = jax.tree.map(lambda x: x[np.newaxis, :], obs_)
                 dones_ = jax.tree.map(lambda x: x[np.newaxis, :], last_dones)
 
-                actions = expert_heuristic(obs_, expert_cached_values)
-                actions = jax.tree.map(lambda x: x.squeeze(0), actions) # rm dummy time_step dim
+                actions = expert_heuristic(env_state.env_state, log_train_env.agents, expert_cached_values)
 
                 # step in env with action
                 obs, env_state, rewards, dones, infos = wrapped_env.batch_step(key_s, env_state, actions)
@@ -583,8 +561,7 @@ def make_train(config, log_train_env, log_test_env, expert_heuristic: Callable, 
                 h_state, policy_action_logits = homogeneous_pass(train_state.params['agent'], last_h, obs_, dones_)
                 policy_actions = jax.tree_util.tree_map(lambda q, valid_idx: jnp.argmax(q.squeeze(0)[..., valid_idx], axis=-1), policy_action_logits, wrapped_env.valid_actions)
 
-                expert_actions = expert_heuristic(obs_, expert_cached_values)
-                expert_actions = jax.tree.map(lambda x: x.squeeze(0), expert_actions) # rm dummy time_step dim
+                expert_actions = expert_heuristic(env_state.env_state, log_train_env.agents, expert_cached_values)
 
                 # pick expert actions with probability beta, else choose learned policy
                 beta = config['DAGGER_BETA']  # Probability of using expert action
