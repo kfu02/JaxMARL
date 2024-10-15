@@ -297,6 +297,17 @@ def make_train(config, viz_test_env):
         )
         ac_init_hstate = ScannedRNN.initialize_carry(config["NUM_ENVS"], config["GRU_HIDDEN_DIM"])
         actor_network_params = actor_network.init(_rng_actor, ac_init_hstate, ac_init_x)
+
+        # log agent param count
+        actor_param_count = sum(x.size for x in jax.tree_util.tree_leaves(actor_network_params))
+        wandb.log({"actor_param_count": actor_param_count})
+        print("actor_param_count", actor_param_count)
+        print("-" * 10)
+        print("DETAILED ACTOR PARAM COUNT:")
+        for name, param in jax.tree_util.tree_flatten_with_path(actor_network_params)[0]:
+            print(f"{name}: {param.shape}")
+        print("-" * 10)
+
         
         cr_init_x = (
             jnp.zeros((1, config["NUM_ENVS"], env.world_state_size(),)),  #  + env.observation_space(env.agents[0]).shape[0]
