@@ -1,28 +1,48 @@
 ENV_NAME: MPE_simple_transport
 ENV_KWARGS:
-  max_steps: 100 # 25
+  max_steps: 50 # 25
 
   # reward shaping
   lumber_pickup_reward: 2.5 # reward given to an agent for pickup up lumber if their lumber capacity is > 0
   concrete_pickup_reward: 2.5 # reward given to an agent for pickup of concrete if their capacity is > 0.
   dropoff_reward: 10 # the amount of reward an agent gets for dropping off a resource
+  quota_penalty: -0.1
 
-  # capabilities implemented in MPE_simple_fire: [fire_fight_cap, accel]
+  # capabilities implemented in MPE_simple_transport: [lumber_cap, concrete_cap]
   capability_aware: True # T/F
   num_capabilities: 2
   num_agents: 4
 
-  site_quota: [4., 4.]
-
   # NOTE: if these lists are longer than num_agents, env will sample num_agents randomly from them each train iter
-  agent_rads: [0.2, 0.2, 0.2, 0.2]
-  agent_accels: [2, 2, 2, 2]
-  agent_capacities: [[1., 0.], [0., 1.], [1., 0.], [0., 1.]]
+  agent_rads: [0.1, 0.1, 0.1, 0.1]
+  agent_accels: [3, 3, 3, 3]
+  agent_capacities:
+     # train range sums to 0.5
+     - [[0.1, 0.4], [0.2, 0.3], [0.3, 0.2], [0.5, 0.0]]
+     - [[0.2, 0.3], [0.3, 0.2], [0.4, 0.1], [0.5, 0.0]]
+     - [[0.0, 0.5], [0.1, 0.4], [0.3, 0.2], [0.5, 0.0]]
+     - [[0.0, 0.5], [0.1, 0.4], [0.2, 0.3], [0.4, 0.1]]
+     - [[0.0, 0.5], [0.1, 0.4], [0.2, 0.3], [0.5, 0.0]]
+     - [[0.1, 0.4], [0.3, 0.2], [0.4, 0.1], [0.5, 0.0]]
+     - [[0.0, 0.5], [0.2, 0.3], [0.4, 0.1], [0.5, 0.0]]
+     - [[0.0, 0.5], [0.2, 0.3], [0.3, 0.2], [0.5, 0.0]]
+     - [[0.0, 0.5], [0.1, 0.4], [0.4, 0.1], [0.5, 0.0]]
+     - [[0.1, 0.4], [0.2, 0.3], [0.4, 0.1], [0.5, 0.0]]
 
-  # agent_rads: [0.05]
-  # agent_accels: [1]
-  # agent_capacities: [[0.0, 1.0]]
 
-  # test_team:
-  #   agent_capacities: [[0.1, 0.9], [0.5, 0.5], [0.5, 0.5], [0.9, 0.1]]
+  site_quota: [2., 2.] # NOTE overriden by random initialization
 
+  test_team:
+    agent_capacities:
+      - [[0.72, 0.28], [0.98, 0.02], [0.17, 0.83], [0.63, 0.37]]
+      - [[0.88, 0.12], [0.56, 0.44], [0.04, 0.96], [0.24, 0.76]]
+      - [[0.29, 0.71], [0.01, 0.99], [0.56, 0.44], [0.18, 0.82]]
+      - [[0.26, 0.74], [0.65, 0.35], [0.95, 0.05], [0.37, 0.63]]
+      - [[0.52, 0.48], [0.77, 0.23], [0.41, 0.59], [0.96, 0.04]]
+      - [[0.12, 0.88], [0.86, 0.14], [0.97, 0.03], [0.38, 0.62]]
+      - [[0.68, 0.32], [0.87, 0.13], [0.73, 0.27], [0.4,  0.6 ]]
+      - [[0.41, 0.59], [0.54, 0.46], [0.5,  0.5],  [0.67, 0.33]]
+      - [[1.,   0.],   [0.22, 0.78], [0.63, 0.37], [0.16, 0.84]]
+      - [[0.2,  0.8],  [0.48, 0.52], [0.61, 0.39], [0.07, 0.93]]
+
+        
