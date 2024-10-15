@@ -52,78 +52,48 @@ class TransitionHstate(NamedTuple):
     infos: dict
     hstate: dict
 
-def expert_heuristic_material_transport(obs_dict, cached_values):
+def expert_heuristic_material_transport(env_state, agent_list, cached_values):
     """
     Expert policy to gather samples from for HMT env.
-    pi(obs) -> action for each agent/obs
 
-    Input: obs_dict = {agent_i : [timesteps, num_envs, obs_dim]}
+    Input: env_state = full knowledge of state at time t
     Output: actions = {agent_i : [timesteps, num_envs]} (rather than outputting act_dim, directly output index of best action)
 
     cached_values are unused.
     """
-    # Stack observations to be per-environment
-    all_obs = jnp.stack(list(obs_dict.values()))  # [n_agents, ?, n_envs, obs_dim]
-    all_obs = all_obs.squeeze(1)  # [n_agents, n_envs, obs_dim]
-    
-    n_agents, n_envs, obs_dim = all_obs.shape
+    n_agents = len(agent_list)
     
     # action space
-    unit_vectors = jnp.array([[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]])  # [9, 2]
+    unit_vectors = jnp.array([[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]])
 
-    # split up observation based on below observation space construction 
-    # obs = jnp.concatenate([
-    #     ego_pos.flatten(),  # 2
-    #     rel_other_pos.flatten(),  # N-1, 2
-    #     ego_vel.flatten(),  # 2
-    #     rel_landmark_p_pos.flatten(), # 3, 2
-    #     state.site_quota.flatten() # 1
-    #     payload.flatten(), # 1
-    #     # NOTE: caps must go last for hypernet logic
-    #     ego_cap.flatten(),  # n_cap
-    #     other_cap.flatten(),  # N-1, n_cap
-    # ])
-
+    # each element in env_state is [num_envs, n_agents, ...]
+    agent_pos = env_state.p_pos[:, :n_agents, :]
     # landmark relative locations ordered [concrete depot, lumber depot, construction site]
-    landmark_start = (4 + (n_agents-1)*2)
-    landmark_end = landmark_start+(3*2)
-    rel_landmark_p_pos = all_obs[..., landmark_start:landmark_end].reshape(n_agents, n_envs, 3, 2)  # [n_agents, n_envs, 3, 2]
-
-    # site quota
-    quota_start = landmark_end
-    quota_end = landmark_end + 2
-    site_quota = all_obs[..., quota_start:quota_end]
-
-    # payload
-    payload_start = 2+(n_agents-1)*2+2+(3*2)+2
-    payload_end = payload_start + 2
-    payload = all_obs[..., payload_start:payload_end]  # [n_agents, n_envs]
-
-    # ego capability
-    ego_cap_start = payload_end
-    ego_cap = all_obs[..., ego_cap_start:ego_cap_start + 2]  # [n_agents, n_envs, 2]
+    landmark_pos = env_state.p_pos[:, n_agents:, :]
+    agent_capacity = env_state.capacity
+    payload = env_state.payload # curr agent payload
+    quota = env_state.site_quota
 
     # If payload == 0: move towards landmark idx = argmax(ego_cap), else move towards construction site
+    # T = both payloads empty, F = else
     payload_mask = jnp.bitwise_and(payload[..., 0] == 0, payload[..., 1] == 0)
-    # site_quota_mask = jnp.bitwise_or(site_quota[..., 0] < 0, site_quota[..., 1] < 0)
-    # target_landmark_idx = jnp.where(jnp.bitwise_and(payload_mask, site_quota_mask), jnp.argmax(ego_cap, axis=-1), 2)  # [n_agents, n_envs]
-
-    target_landmark_idx = jnp.where(payload_mask, jnp.argmax(ego_cap, axis=-1), 2)  # [n_agents, n_envs]
-
-    # target_landmark_idx = jnp.ones((n_agents, n_envs)).astype(int)
+    # 0/1 = index of depots, 2 = index of construction site
+    target_landmark_idx = jnp.where(payload_mask, jnp.argmax(agent_capacity, axis=-1), 2)  # [n_agents, n_envs]
     
     # get vectors to landmarks
-    target_landmark_rel_pos = jnp.take_along_axis(rel_landmark_p_pos, target_landmark_idx[..., None, None], axis=-2).squeeze(-2)  # [n_agents, n_envs, 2]
-    norm_direction = target_landmark_rel_pos / (jnp.linalg.norm(target_landmark_rel_pos, axis=-1, keepdims=True))
+    num_envs, num_indices = target_landmark_idx.shape
+    batch_indices = jnp.arange(num_envs)[:, None].repeat(num_indices, axis=1)
+    target_pos = landmark_pos[batch_indices, target_landmark_idx]
+    # target_pos: [n_envs, n_agents, 2] = target position for each agent, in each env
+    rel_target_pos = target_pos - agent_pos
+    norm_direction = rel_target_pos / (jnp.linalg.norm(rel_target_pos, axis=-1, keepdims=True))
 
     # get optimal direction
     action_alignment = jnp.einsum('aij,bj->aib', norm_direction, unit_vectors)
     optimal_actions = jnp.argmax(action_alignment, axis=-1)
-    # optimal_actions = jnp.where(near_target.squeeze(), jnp.zeros_like(optimal_actions), optimal_actions)
-    optimal_actions = optimal_actions.T
     actions = {}
-    for i, agent_name in enumerate(obs_dict.keys()):
-        actions[agent_name] = optimal_actions[:, i].reshape(1,-1)   # make compatible with squeeze in training loop
+    for i, agent_name in enumerate(agent_list):
+        actions[agent_name] = optimal_actions[:, i]
     
     return actions
 
