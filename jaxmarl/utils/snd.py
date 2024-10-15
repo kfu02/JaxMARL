@@ -21,7 +21,7 @@ def homogeneous_pass_qmix(params, hidden_state, obs, dones, agent=None):
 
 def homogeneous_pass_mappo(params, hidden_state, obs, dones, agent=None):
     """
-    Copied and slightly modified from qmix.py
+    Forward pass for mappo, copied from mappo_rnn_mpe.py
     """
     original_shape = obs.shape
     # concatenate agents and parallel envs to process them in one batch
@@ -60,6 +60,8 @@ def snd(rollouts, hiddens, dim_c, params, alg='qmix', agent=None):
         hiddens = jnp.transpose(hiddens, (1, 2, 0, 3)) # [n_agents, batch_dim, n_agents, hidden_dim]
     
     if alg == 'mappo':
+        rollouts = jnp.transpose(rollouts, (0, 2, 1, 3)) # [timesteps, batch_dim, n_agents, obs_dim]
+        hiddens = jnp.transpose(hiddens, (0, 2, 1, 3)) # [timesteps, batch_dim, n_agents, obs_dim]
         policy = homogeneous_pass_mappo
     
     timesteps, batch_size, n_agents, obs_dim = rollouts.shape
