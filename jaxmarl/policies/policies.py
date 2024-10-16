@@ -178,6 +178,10 @@ class AgentHyperRNN(nn.Module):
         # RNN 
         rnn_in = (embedding, dones)
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
+        # TODO: try sending hidden state to hypernet instead of raw obs
+        # issue is that ScannedRNN doesn't aggregate the hidden state over
+        # timesteps, so it's not possible to concatenate the hidden_state to
+        # caps when leading dim TS != 1
 
         # decoder hypernet
         q_vals = self.hyper_forward(self.hidden_dim, self.action_dim, embedding, orig_obs, time_steps, batch_size)
