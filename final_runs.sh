@@ -9,11 +9,9 @@ echo "\nSTOP: copy-paste ENV_KWARGS into mappo_homogeneous_rnn_mpe.yaml!\n"
 
 # DAGGER
 #  - CASH
-#  TODO: add seeds to BOTH DAGGER HMT and FIRE after testing
-#  76, 58, 14
-python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_fire ++alg.AGENT_HYPERAWARE=True ++env.ENV_KWARGS.capability_aware=True ++alg.AGENT_HIDDEN_DIM=2048 ++alg.AGENT_HYPERNET_KWARGS.INIT_SCALE=0.2 ++tag=final-dagger-fire
+python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_fire ++alg.AGENT_HYPERAWARE=True ++env.ENV_KWARGS.capability_aware=True ++alg.AGENT_HIDDEN_DIM=2048 ++alg.AGENT_HYPERNET_KWARGS.INIT_SCALE=0.2 ++tag=final-dagger-fire ++SEED=76,58,14
 #  - RNN aware, unaware
-python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_fire ++alg.AGENT_HYPERAWARE=False ++env.ENV_KWARGS.capability_aware=True,False ++alg.AGENT_HIDDEN_DIM=4096 ++tag=final-dagger-fire
+python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_fire ++alg.AGENT_HYPERAWARE=False ++env.ENV_KWARGS.capability_aware=True,False ++alg.AGENT_HIDDEN_DIM=4096 ++tag=final-dagger-fire ++SEED=76,58,14
 
 # MAPPO 
 #  - CASH
@@ -38,9 +36,9 @@ echo "\nSTOP: copy-paste ENV_KWARGS into mappo_homogeneous_rnn_mpe.yaml!\n"
 
 # DAGGER
 #  - CASH
-python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_transport ++alg.AGENT_HYPERAWARE=True ++env.ENV_KWARGS.capability_aware=True ++alg.AGENT_HIDDEN_DIM=2048 ++alg.AGENT_HYPERNET_KWARGS.INIT_SCALE=0.2 ++tag=final-dagger-hmt
+python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_transport ++alg.AGENT_HYPERAWARE=True ++env.ENV_KWARGS.capability_aware=True ++alg.AGENT_HIDDEN_DIM=2048 ++alg.AGENT_HYPERNET_KWARGS.INIT_SCALE=0.2 ++tag=final-dagger-hmt ++SEED=76,58,14
 #  - RNN aware, unaware
-python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_transport ++alg.AGENT_HYPERAWARE=False ++env.ENV_KWARGS.capability_aware=True,False ++alg.AGENT_HIDDEN_DIM=4096 ++tag=final-dagger-hmt
+python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_transport ++alg.AGENT_HYPERAWARE=False ++env.ENV_KWARGS.capability_aware=True,False ++alg.AGENT_HIDDEN_DIM=4096 ++tag=final-dagger-hmt ++SEED=76,58,14
 
 # MAPPO
 #  - CASH
