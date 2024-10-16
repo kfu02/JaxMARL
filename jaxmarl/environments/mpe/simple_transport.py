@@ -501,8 +501,12 @@ def generate_teams(seed):
 
     # for test teams, sample cap_0 from range (0-1), set cap_1 to be (1-cap_0)
     N_test_teams = 10
-    cap_0 = np.random.uniform(0, 1, N_test_teams*team_size).reshape(N_test_teams, team_size)
-    cap_1 = 1-cap_0
+    big_cap_0 = np.random.uniform(0, 1, N_test_teams*(team_size-1)).reshape(N_test_teams, (team_size-1))
+    small_cap_0 = np.random.uniform(0, 0.25, N_test_teams).reshape(N_test_teams, 1)
+    big_cap_1 = 1-big_cap_0
+    small_cap_1 = 0.25-small_cap_0
+    cap_0 = np.concatenate([big_cap_0, small_cap_0], axis=-1)
+    cap_1 = np.concatenate([big_cap_1, small_cap_1], axis=-1)
 
     # tie caps together by agent, rearrange to shape [N_teams, N_agents, N_cap]
     test_teams = np.round(np.stack([cap_0, cap_1]).transpose(1, 2, 0), decimals=2)
