@@ -15,7 +15,7 @@ python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_fir
 
 # MAPPO 
 #  - CASH
-python baselines/MAPPO/mappo_rnn_mpe.py -m ++AGENT_HYPERAWARE=True ++ENV_KWARGS.capability_aware=True ++FC_DIM_SIZE=64 ++GRU_HIDDEN_DIM=64 ++AGENT_HYPERNET_KWARGS.INIT_SCALE=0.2,0.5 ++tag=final-mappo-fire
+python baselines/MAPPO/mappo_rnn_mpe.py -m ++AGENT_HYPERAWARE=True ++ENV_KWARGS.capability_aware=True ++FC_DIM_SIZE=32 ++GRU_HIDDEN_DIM=32 ++AGENT_HYPERNET_KWARGS.INIT_SCALE=0.2,0.5 ++tag=final-mappo-fire
 #  - RNN aware, unaware
 python baselines/MAPPO/mappo_rnn_mpe.py -m ++AGENT_HYPERAWARE=False ++ENV_KWARGS.capability_aware=True,False ++FC_DIM_SIZE=128 ++GRU_HIDDEN_DIM=128 ++tag=final-mappo-fire
 
@@ -42,7 +42,7 @@ python baselines/imitation_learning/dagger.py -m +alg=dagger +env=mpe_simple_tra
 
 # MAPPO
 #  - CASH
-python baselines/MAPPO/mappo_rnn_mpe.py -m ++AGENT_HYPERAWARE=True ++ENV_KWARGS.capability_aware=True ++FC_DIM_SIZE=64 ++GRU_HIDDEN_DIM=64 ++AGENT_HYPERNET_KWARGS.INIT_SCALE=0.2,0.5 ++tag=final-mappo-hmt
+python baselines/MAPPO/mappo_rnn_mpe.py -m ++AGENT_HYPERAWARE=True ++ENV_KWARGS.capability_aware=True ++FC_DIM_SIZE=32 ++GRU_HIDDEN_DIM=32 ++AGENT_HYPERNET_KWARGS.INIT_SCALE=0.2,0.5 ++tag=final-mappo-hmt
 #  - RNN aware, unaware
 python baselines/MAPPO/mappo_rnn_mpe.py -m ++AGENT_HYPERAWARE=False ++ENV_KWARGS.capability_aware=True,False ++FC_DIM_SIZE=128 ++GRU_HIDDEN_DIM=128 ++tag=final-mappo-hmt
 
