@@ -26,7 +26,9 @@ class SimpleTransportMPE(SimpleMPE):
         self.capability_aware = capability_aware
         self.num_capabilities = num_capabilities
         self.dim_capabilities = num_agents * num_capabilities
-        self.test_team = kwargs.get("test_teams", None)
+        self.test_team_capacities = kwargs.get("test_team_capacities", None)
+        if self.test_team_capacities is not None:
+            self.test_team_capacities = jnp.array(self.test_team_capacities)
 
         # observation dimensions
         pos_dim = num_agents * 2
@@ -323,9 +325,9 @@ class SimpleTransportMPE(SimpleMPE):
 
         # if a test distribution is provided and this is a test_env, override capacities
         # NOTE: also add other capabilities here?
-        if self.test_env_flag and self.test_team is not None:
-            selected_team = jax.random.choice(key_t, self.test_team["agent_capacities"].shape[0], shape=(1,))
-            agent_capacities = jnp.array(self.test_team["agent_capacities"][selected_team]).squeeze()
+        if self.test_env_flag and self.test_team_capacities is not None:
+            selected_team = jax.random.choice(key_t, self.test_team_capacities.shape[0], shape=(1,))
+            agent_capacities = self.test_team_capacities[selected_team].squeeze()
 
         # initialize with empty payload or a payload corresponding to capacity
         # payload = jnp.where(
