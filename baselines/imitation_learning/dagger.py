@@ -62,6 +62,46 @@ def expert_heuristic_material_transport(env_state, agent_list, cached_values):
     cached_values are unused.
     """
     n_agents = len(agent_list)
+
+    def find_optimal_assignment(site_quota, capacities):
+        """
+        Finds the optimal assignment of agents to deliver lumber or concrete by evaluating all possible assignments.
+        
+        Arguments:
+        site_quota -- jnp.array of shape (2,) representing the remaining [lumber, concrete] quota.
+        capacities -- jnp.array of shape (n_agents, 2) where each row represents [lumber, concrete] an agent can carry.
+
+        Returns:
+        jnp.array of shape (n_agents,) with 0 if the agent should deliver lumber and 1 if the agent should deliver concrete.
+        """
+        n_agents = capacities.shape[0]
+        
+        # Total number of possible assignments (2^n_agents)
+        total_assignments = 2 ** n_agents
+        
+        # Generate all possible binary assignments (0 for lumber, 1 for concrete)
+        all_assignments = (jnp.arange(total_assignments)[:, None] >> jnp.arange(n_agents)) & 1
+        # print(all_assignments.shape)
+        
+        # For each assignment, calculate the total lumber and concrete delivered
+        lumber_delivery = jnp.sum((all_assignments == 1) * capacities[:, 1], axis=-1) 
+        concrete_delivery = jnp.sum((all_assignments == 0) * capacities[:, 0], axis=-1) 
+        
+        # Calculate how much of the quota is reduced for each assignment
+        lumber_reduction = jnp.minimum(lumber_delivery, -site_quota[1])
+        concrete_reduction = jnp.minimum(concrete_delivery, -site_quota[0])
+        
+        # Calculate the total reduction in site quota
+        total_reduction = lumber_reduction + concrete_reduction
+        # print(total_reduction.shape)
+        
+        # Find the index of the assignment that maximizes total reduction
+        optimal_idx = jnp.argmax(total_reduction)
+        
+        # Return the optimal assignment
+        optimal_assignment = all_assignments[optimal_idx]
+        
+        return optimal_assignment
     
     # action space
     unit_vectors = jnp.array([[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]])
@@ -78,12 +118,19 @@ def expert_heuristic_material_transport(env_state, agent_list, cached_values):
     # T = both payloads empty, F = else
     payload_mask = jnp.bitwise_and(payload[..., 0] == 0, payload[..., 1] == 0)
     # 0/1 = index of depots, 2 = index of construction site
-    target_landmark_idx = jnp.where(payload_mask, jnp.argmax(agent_capacity, axis=-1), 2)  # [n_agents, n_envs]
+    # target_landmark_idx = jnp.where(payload_mask, jnp.argmax(agent_capacity, axis=-1), 2)  # [n_agents, n_envs]
+
+    # Calculate the optimal material assignment based on remaining site quota (this applies when delivering)
+    optimal_assignments = jax.vmap(find_optimal_assignment, in_axes=(0, 0))(quota, agent_capacity)  # 0 for concrete, 1 for lumber
+
+    # Update target landmark based on optimal material delivery decisions (when payload isn't empty)
+    # If delivering, 0 = lumber depot, 1 = concrete depot, 2 = site
+    target_landmark_idx = jnp.where(payload_mask, optimal_assignments, 2)
     
     # get vectors to landmarks
     num_envs, num_indices = target_landmark_idx.shape
     batch_indices = jnp.arange(num_envs)[:, None].repeat(num_indices, axis=1)
-    target_pos = landmark_pos[batch_indices, target_landmark_idx]
+    target_pos = landmark_pos[batch_indices, target_landmark_idx] * 0.5 # multiply by a shrinking factor to make movement more efficient
     # target_pos: [n_envs, n_agents, 2] = target position for each agent, in each env
     rel_target_pos = target_pos - agent_pos
     norm_direction = rel_target_pos / (jnp.linalg.norm(rel_target_pos, axis=-1, keepdims=True))
