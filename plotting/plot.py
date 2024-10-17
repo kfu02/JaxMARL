@@ -226,7 +226,7 @@ def plot_metrics(df, y_label, y_column, title, mean_window, std_window, downsamp
 
 def plot_from_saved():
     # load preprocessed data
-    filename = "final-dagger-fire.pkl"
+    filename = "final-mappo-hmt.pkl"
     df = load_dataframe(filename)
 
     pd.set_option('display.max_columns', None)
@@ -236,17 +236,18 @@ def plot_from_saved():
     df['baseline'] = df.apply(lambda row: f"{baseline_name(row)}", axis=1)
 
     # Fire
-    plot_metrics(df, y_label='Training Returns', y_column='policy/returns', title='Firefighting', mean_window=100, std_window=100, downsample_factor=1)
-    # plot_metrics(df, y_label='Test Returns', y_column='test_returns', title='Firefighting', mean_window=100, std_window=100, downsample_factor=1)
-    plot_metrics(df, y_label='SND', y_column='policy/snd', title='Firefighting', mean_window=100, std_window=100, downsample_factor=1)
-    plot_metrics(df, y_label='Success Rate', y_column='policy/fire_success_rate', title='Firefighting', mean_window=100, std_window=100, downsample_factor=1)
-    plot_metrics(df, y_label='Pct of Fires Extinguished', y_column='policy/pct_fires_put_out', title='Firefighting', mean_window=100, std_window=100, downsample_factor=1)
+    # plot_metrics(df, y_label='Training Returns', y_column='returns', title='Firefighting', mean_window=100, std_window=100, downsample_factor=10)
+    # plot_metrics(df, y_label='Test Returns', y_column='test_returns', title='Firefighting', mean_window=100, std_window=100, downsample_factor=10)
+    # plot_metrics(df, y_label='SND', y_column='test_snd', title='Firefighting', mean_window=100, std_window=100, downsample_factor=10)
+    # plot_metrics(df, y_label='Success Rate', y_column='test_fire_success_rate', title='Firefighting', mean_window=100, std_window=100, downsample_factor=10)
+    # plot_metrics(df, y_label='Pct of Fires Extinguished', y_column='test_pct_fires_put_out', title='Firefighting', mean_window=100, std_window=100, downsample_factor=10)
 
     # HMT
-    # plot_metrics(df, y_label='Training Returns', y_column='policy/returns', title='Transport', mean_window=100, std_window=100, downsample_factor=1)
-    # plot_metrics(df, y_label='SND', y_column='policy/snd', title='Transport', mean_window=100, std_window=100, downsample_factor=1)
-    # plot_metrics(df, y_label='Success Rate', y_column='policy/quota_met', title='Transport', mean_window=100, std_window=100, downsample_factor=1)
-    # plot_metrics(df, y_label='Makespan', y_column='policy/makespan', title='Transport', mean_window=100, std_window=100, downsample_factor=1)
+    plot_metrics(df, y_label='Training Returns', y_column='returns', title='Transport', mean_window=100, std_window=100, downsample_factor=10)
+    plot_metrics(df, y_label='Test Returns', y_column='test_returns', title='Transport', mean_window=100, std_window=100, downsample_factor=10)
+    plot_metrics(df, y_label='SND', y_column='test_snd', title='Transport', mean_window=100, std_window=100, downsample_factor=10)
+    plot_metrics(df, y_label='Success Rate', y_column='test_quota_met', title='Transport', mean_window=100, std_window=100, downsample_factor=10)
+    plot_metrics(df, y_label='Makespan', y_column='test_makespan', title='Transport', mean_window=100, std_window=100, downsample_factor=10)
 
 
 if __name__ == "__main__":
