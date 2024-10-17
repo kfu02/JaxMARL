@@ -74,9 +74,9 @@ def baseline_name(row):
             return "CASH"
     else:
         if row['cap_aware']:
-            return "RNN-CA"
+            return "RNN-EXP"
         else:
-            return "RNN-UN"
+            return "RNN-IMP"
 
 def get_from_wandb():
     # get runs from wandb
@@ -195,8 +195,8 @@ def plot_metrics(df, y_label, y_column, title, mean_window, std_window, downsamp
     base_palette = sns.color_palette()
     palette = {
         'CASH': base_palette[2],
-        'RNN-CA': base_palette[0],
-        'RNN-UN': base_palette[1],
+        'RNN-EXP': base_palette[0],
+        'RNN-IMP': base_palette[1],
     }
     
     # Plot each baseline separately
@@ -214,16 +214,30 @@ def plot_metrics(df, y_label, y_column, title, mean_window, std_window, downsamp
                         baseline_data[y_column] + baseline_data[f'{y_column}_std'],
                         color=color, alpha=0.2)
     
-    plt.xlabel('Timestep', fontsize=16)
-    plt.ylabel(y_label, fontsize=16)
-    plt.title(title, fontsize=24)
-    # plt.legend(loc='best').set_draggable(True)
+    plt.xlabel('Timestep')
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.legend(loc='best', fontsize=18)
     plt.tight_layout(pad=0.5)
 
     # plt.show()
     plt.savefig(f'{save_folder}/{title}-{y_label}.png'.lower().replace(' ', '-'))
 
 def plot_from_saved():
+    """
+    # for legend
+    filename = "final-qmix-fire.pkl"
+    df = load_dataframe(filename)
+
+    pd.set_option('display.max_columns', None)
+    print(df.head())
+    
+    # translate baseline names
+    df['baseline'] = df.apply(lambda row: f"{baseline_name(row)}", axis=1)
+    plot_metrics(df, y_label='Training Returns', y_column='returns', title='Firefighting', mean_window=100, std_window=100, downsample_factor=10, save_folder=".")
+    exit(0)
+    """
+
     # QMIX Fire
     filename = "final-qmix-fire.pkl"
     df = load_dataframe(filename)
@@ -324,7 +338,99 @@ def plot_from_saved():
     plot_metrics(df, y_label='Makespan', y_column='policy/makespan', title='Transport', mean_window=100, std_window=100, downsample_factor=1, save_folder="dagger")
 
 
+def plot_parameter_counts(param_dict, title):
+    """
+    Creates a horizontal bar chart showing parameter counts for different architectures
+    """
+    plt.figure(figsize=(4, 3))
+    
+    # Data
+    baselines = list(param_dict.keys())
+    params = list(param_dict.values())
+    
+    # Colors
+    base_palette = sns.color_palette()
+    color_dict = {
+        'CASH': base_palette[2],
+        'RNN-EXP': base_palette[0],
+        'RNN-IMP': base_palette[1]
+    }
+    colors = [color_dict[baseline] for baseline in baselines]
+    
+    # Create horizontal bar chart
+    y_pos = np.arange(len(baselines))
+    bars = plt.barh(y_pos, params, color=colors)
+    
+    # Customize the plot
+    plt.xlabel('Learnable Parameters')
+    plt.ylabel('Architecture')
+    plt.title(title)
+    
+    # Format x-axis to use scientific notation
+    plt.ticklabel_format(axis='x', style='sci', scilimits=(4,4))
+    # Or alternatively, divide by 10000 manually:
+    # plt.xticks(plt.xticks()[0], [f'{x/1e4:.1f}' for x in plt.xticks()[0]])
+    
+    # Add value labels inside the bars, aligned to the right end
+    for i, bar in enumerate(bars):
+        width = bar.get_width()
+        plt.text(width * 0.95,  # Position at 95% of bar width
+                bar.get_y() + bar.get_height()/2,
+                f'{params[i]:,}',
+                ha='right',  # Right-align the text
+                va='center',
+                fontsize=10,
+                color='white')  # Make text white for better visibility
+    
+    plt.yticks(y_pos, baselines)
+    # plt.grid(axis='x', linestyle='--', alpha=0.2)
+    plt.tight_layout(pad=0.5)
+    # plt.show()
+    plt.savefig(f'{title}-param-ct.png'.lower().replace('/', ' ').replace(' ', '-'))
+
+
 if __name__ == "__main__":
     # get_from_wandb()
-    plot_from_saved()
+    # plot_from_saved()
 
+    param_counts = {
+        'CASH': 42469,
+        'RNN-EXP': 102149,
+        'RNN-IMP': 102149
+    }
+    plot_parameter_counts(param_counts, 'QMIX / Firefighting')
+
+    param_counts = {
+        'CASH': 43365,
+        'RNN-EXP': 103173,
+        'RNN-IMP': 103173
+    }
+    plot_parameter_counts(param_counts, 'QMIX / Transport')
+
+    param_counts = {
+        'CASH': 26821,
+        'RNN-EXP': 118661,
+        'RNN-IMP': 118661
+    }
+    plot_parameter_counts(param_counts, 'MAPPO / Firefighting')
+
+    param_counts = {
+        'CASH': 27269,
+        'RNN-EXP': 119685,
+        'RNN-IMP': 119685
+    }
+    plot_parameter_counts(param_counts, 'MAPPO / Transport')
+
+    param_counts = {
+        'CASH': 39959557,
+        'RNN-EXP': 100786181,
+        'RNN-IMP': 100786181
+    }
+    plot_parameter_counts(param_counts, 'DAgger / Firefighting')
+
+    param_counts = {
+        'CASH': 39988229,
+        'RNN-EXP': 100818949,
+        'RNN-IMP': 100818949
+    }
+    plot_parameter_counts(param_counts, 'DAgger / Transport')
